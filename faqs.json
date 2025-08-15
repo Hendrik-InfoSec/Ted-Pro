@@ -1,14 +1,22 @@
 [
-    {
-        "question": "What are your business hours?",
-        "answer": "Our business hours are Monday to Friday, 9am to 5pm."
-    },
-    {
-        "question": "How can I contact customer support?",
-        "answer": "You can reach our support team at support@example.com or call 123-456-7890."
-    },
-    {
-        "question": "What sizes do the plushies come in?",
-        "answer": "Thank you for your question! We will add an official answer soon."
-    }
+  {
+    "question": "What are your plushies made of?",
+    "answer": "Our plushies use premium hypoallergenic PP cotton filling and ultra-soft polyester or minky fabric that’s safe for kids and cuddly for adults."
+  },
+  {
+    "question": "How long is shipping?",
+    "answer": "Standard shipping typically takes 3–7 business days locally, and 7–14 business days internationally. You’ll receive tracking via email."
+  },
+  {
+    "question": "Do you offer custom plushies?",
+    "answer": "Yes! We offer customization on selected styles (colors, small embroidery). Share your idea and we’ll confirm feasibility, cost, and timeline."
+  },
+  {
+    "question": "What is your return policy?",
+    "answer": "Hassle-free returns within 14 days if unused and in original packaging. Contact us with your order number for a quick pre-paid label."
+  },
+  {
+    "question": "Are your plushies suitable as gifts?",
+    "answer": "Absolutely! Add a free gift note at checkout, and choose optional gift wrapping. We also offer birthday and anniversary bundles."
+  }
 ]
