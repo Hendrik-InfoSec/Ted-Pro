@@ -2,6 +2,7 @@ import streamlit as st
 from datetime import datetime
 from hybrid_engine import HybridEngine
 import os
+openrouter_key = os.getenv("OPENROUTER_API_KEY")
 
 # -------------------------
 # CSS Styling
@@ -158,4 +159,5 @@ def main():
     )
 
 if __name__ == "__main__":
+
     main()
