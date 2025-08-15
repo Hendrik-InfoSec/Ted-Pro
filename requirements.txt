@@ -1,1 +1,4 @@
-"python-dotenv twilio" 
+python-dotenv
+twilio
+streamlit
+hybrid_engine
