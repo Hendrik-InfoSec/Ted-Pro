@@ -1,4 +1,5 @@
-python-dotenv
-twilio
 streamlit
-hybrid_engine
+python-dotenv
+requests
+rapidfuzz
+tenacity
