@@ -1,10 +1,10 @@
 [
-    {
-        "question": "How do I reset my password?",
-        "answer": "Click on 'Forgot password' at login to reset your password."
-    },
-    {
-        "question": "Where can I view my invoices?",
-        "answer": "Invoices are available in your account dashboard under 'Billing'."
-    }
+  {
+    "question": "How much are the Cuddleheroes plushies?",
+    "answer": "Classic plushies start at $19, medium at $29, and jumbo at up to $199. Customs are quoted individually based on complexity."
+  },
+  {
+    "question": "Where do you ship from?",
+    "answer": "Orders ship from our primary warehouse. Local orders get fastest delivery; international routes depend on the destination."
+  }
 ]
