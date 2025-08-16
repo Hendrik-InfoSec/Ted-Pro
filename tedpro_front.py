@@ -162,7 +162,7 @@ def main():
         st.markdown(
             '<div class="header-row"><div class="brand">'
             '<div class="title">🧸 Ted Pro — Your Cuddleheroes Plush Buddy</div>'
-            '<span class="badge">v2025.08</span>'
+            '<span class="badge">v4.1</span>'
             '</div></div>', unsafe_allow_html=True
         )
         st.caption("Smart FAQ + fuzzy matching + GPT fallback • Private & deployment-ready")
@@ -258,3 +258,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
