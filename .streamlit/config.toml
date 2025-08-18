@@ -1,6 +1,13 @@
-[client]
-toolbarMode = "minimal"
+[theme]
+primaryColor = "#ff914d"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f7f7f7"
+textColor = "#000000"
+font = "sans serif"
 
 [server]
 headless = true
-enableCORS = false
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"  # hides Streamlit hamburger & profile
