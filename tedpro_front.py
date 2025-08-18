@@ -111,8 +111,7 @@ def render_message(text, role, timestamp, idx):
 # -------------------------
 # Personality wrapper
 # -------------------------
-def teddy_filter(user_message: str, raw_answer: str, is_first: bool) -> str:
-    friendly_prefix = "Hi there, friend! 🧸 " if is_first else ""
+def teddy_filter(user_message: str, raw_answer: str) -> str:
     sales_tail = ""
     if any(k in user_message.lower() for k in ["gift", "present", "birthday", "anniversary"]):
         sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁"
@@ -120,7 +119,7 @@ def teddy_filter(user_message: str, raw_answer: str, is_first: bool) -> str:
         sales_tail = " I can also compare sizes to help you get the best value."
     elif any(k in user_message.lower() for k in ["custom", "personalize", "embroidery"]):
         sales_tail = " Tell me your idea—I’ll check feasibility, timeline, and a fair quote."
-    return f"{friendly_prefix}{raw_answer}{sales_tail}"
+    return f"{raw_answer}{sales_tail}"
 
 @st.cache_resource(show_spinner=False)
 def get_engine(api_key, model_name, temperature):
@@ -151,7 +150,9 @@ def main():
 
     # --- State
     if "history" not in st.session_state:
-        st.session_state.history = []
+        st.session_state.history = [
+            ("bot", "👋 Hi there, friend! I’m TedPro, your cuddly AI assistant! How can I help today?", datetime.now().strftime("%H:%M"))
+        ]
     if "reload_faqs" not in st.session_state:
         st.session_state.reload_faqs = False
     if "show_history" not in st.session_state:
@@ -179,8 +180,7 @@ def main():
         engine.add_to_history("user", user_msg)
         with st.spinner("Teddy is thinking... 🐻"):
             raw_answer = engine.answer(user_msg) or "I’m always here to help with our plushies!"
-            is_first = (len([r for r, _, _ in st.session_state.history if r == "user"]) == 1)
-            teddy_answer = teddy_filter(user_msg, raw_answer, is_first)
+            teddy_answer = teddy_filter(user_msg, raw_answer)
         st.session_state.history.append(("bot", teddy_answer, datetime.now().strftime("%H:%M")))
         engine.add_to_history("assistant", teddy_answer)
         st.session_state.input_text = ""
