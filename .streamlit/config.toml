@@ -1,0 +1,6 @@
+[client]
+toolbarMode = "minimal"
+
+[server]
+headless = true
+enableCORS = false
