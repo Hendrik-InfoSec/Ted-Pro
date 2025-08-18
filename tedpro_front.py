@@ -1,11 +1,10 @@
-
 import os
 from datetime import datetime
 import streamlit as st
 from hybrid_engine import HybridEngine
 
 # -------------------------
-# Page config (hide menu/footer/logo/sidebar)
+# Page config
 # -------------------------
 st.set_page_config(
     page_title="🧸 Ted Pro — Cuddleheroes",
@@ -15,18 +14,19 @@ st.set_page_config(
 )
 
 # -------------------------
-# Inject CSS for global tweaks
+# Inject CSS to hide Streamlit UI + style
 # -------------------------
 def inject_global_hides():
     st.markdown("""
     <style>
-    /* Hide Streamlit branding, menu, and footer */
+    /* Hide Streamlit default UI */
     #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
     header {visibility: hidden;}
-
-    /* Hide sidebar entirely (if collapsed) */
+    footer {visibility: hidden;}
     [data-testid="stSidebar"] {display: none;}
+    [data-testid="stToolbar"] {display: none !important;}
+    .stAppDeployButton {display: none !important;}
+    .viewerBadge_container__1QSob {display: none !important;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -47,7 +47,7 @@ def get_key(name: str):
     return None
 
 # -------------------------
-# CSS Styling (your polished theme)
+# CSS Styling (polished theme)
 # -------------------------
 def load_css():
     st.markdown("""<style>
@@ -68,7 +68,7 @@ def load_css():
     .app-shell {
         max-width: 860px;
         margin: 20px auto 80px auto;
-        background: rgba(255,255,255,0.9);
+        background: rgba(255,255,255,0.92);
         border: 1px solid rgba(0,0,0,0.05);
         border-radius: 18px;
         box-shadow: 0 10px 30px var(--shadow);
@@ -79,10 +79,6 @@ def load_css():
     .brand .title {font-weight: 800; font-size: 22px;}
     .badge {display:inline-block;padding:6px 10px;border-radius:999px;background:#fff3d6;
             border:1px solid #ffc36a;font-size:12px;color:#6a3b00}
-    .toolbar {display:flex; gap:8px; align-items:center;}
-    .toolbtn {background: var(--cream); border: 1px solid #f3d5b3; padding: 6px 10px;
-              border-radius: 10px; font-size: 13px; cursor: pointer; user-select: none;}
-    .toolbtn:hover { filter: brightness(0.98); }
     .messages {max-height: 560px; overflow-y: auto; padding: 14px;
                background: rgba(255, 255, 255, 0.9); border-radius: 14px;
                box-shadow: 0 5px 16px var(--shadow);
@@ -113,7 +109,7 @@ def render_message(text, role, timestamp, idx):
     '''
 
 # -------------------------
-# Personality wrapper (teddy)
+# Personality wrapper
 # -------------------------
 def teddy_filter(user_message: str, raw_answer: str, is_first: bool) -> str:
     friendly_prefix = "Hi there, friend! 🧸 " if is_first else ""
@@ -138,17 +134,13 @@ def main():
     st.markdown('<div class="app-shell">', unsafe_allow_html=True)
 
     # --- Header
-    colL, colR = st.columns([0.75, 0.25])
-    with colL:
-        st.markdown(
-            '<div class="header-row"><div class="brand">'
-            '<div class="title">🧸 Ted Pro — Your Cuddleheroes Plush Buddy</div>'
-            '<span class="badge">v4.1</span>'
-            '</div></div>', unsafe_allow_html=True
-        )
-        st.caption("Smart FAQ + fuzzy matching + GPT fallback • Private & deployment-ready")
-    with colR:
-        st.markdown('<div class="toolbar"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="header-row"><div class="brand">'
+        '<div class="title">🧸 Ted Pro — Your Cuddleheroes Plush Buddy</div>'
+        '<span class="badge">v4.1</span>'
+        '</div></div>', unsafe_allow_html=True
+    )
+    st.caption("Smart FAQ + fuzzy matching + GPT fallback • Private & deployment-ready")
 
     # --- Keys & engine
     api_key = get_key("OPENROUTER_API_KEY")
