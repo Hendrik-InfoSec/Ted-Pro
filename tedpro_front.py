@@ -1,12 +1,36 @@
+
 import os
 from datetime import datetime
 import streamlit as st
 from hybrid_engine import HybridEngine
 
 # -------------------------
-# Page config
+# Page config (hide menu/footer/logo/sidebar)
 # -------------------------
-st.set_page_config(page_title="🧸 Ted Pro — Cuddleheroes", layout="centered")
+st.set_page_config(
+    page_title="🧸 Ted Pro — Cuddleheroes",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+    page_icon="🧸"
+)
+
+# -------------------------
+# Inject CSS for global tweaks
+# -------------------------
+def inject_global_hides():
+    st.markdown("""
+    <style>
+    /* Hide Streamlit branding, menu, and footer */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Hide sidebar entirely (if collapsed) */
+    [data-testid="stSidebar"] {display: none;}
+    </style>
+    """, unsafe_allow_html=True)
+
+inject_global_hides()
 
 # -------------------------
 # Secrets / Keys
@@ -23,11 +47,10 @@ def get_key(name: str):
     return None
 
 # -------------------------
-# CSS Styling (polished)
+# CSS Styling (your polished theme)
 # -------------------------
 def load_css():
-    st.markdown("""
-    <style>
+    st.markdown("""<style>
     :root {
       --bg1: #FFA559;
       --bg2: #7EC8E3;
@@ -51,79 +74,34 @@ def load_css():
         box-shadow: 0 10px 30px var(--shadow);
         padding: 18px 18px 12px 18px;
     }
-    .header-row {
-        display:flex; align-items:center; justify-content:space-between; gap:12px;
-        margin-bottom: 8px;
-    }
-    .brand {
-        display:flex; align-items:center; gap:10px;
-    }
-    .brand .title {
-        font-weight: 800; font-size: 22px;
-    }
-    .badge {
-        display:inline-block;padding:6px 10px;border-radius:999px;
-        background:#fff3d6;border:1px solid #ffc36a;font-size:12px;color:#6a3b00
-    }
+    .header-row {display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom: 8px;}
+    .brand {display:flex; align-items:center; gap:10px;}
+    .brand .title {font-weight: 800; font-size: 22px;}
+    .badge {display:inline-block;padding:6px 10px;border-radius:999px;background:#fff3d6;
+            border:1px solid #ffc36a;font-size:12px;color:#6a3b00}
     .toolbar {display:flex; gap:8px; align-items:center;}
-    .toolbtn {
-        background: var(--cream);
-        border: 1px solid #f3d5b3;
-        padding: 6px 10px;
-        border-radius: 10px;
-        font-size: 13px;
-        cursor: pointer;
-        user-select: none;
-    }
+    .toolbtn {background: var(--cream); border: 1px solid #f3d5b3; padding: 6px 10px;
+              border-radius: 10px; font-size: 13px; cursor: pointer; user-select: none;}
     .toolbtn:hover { filter: brightness(0.98); }
-    .messages {
-        max-height: 560px;
-        overflow-y: auto;
-        padding: 14px;
-        background: rgba(255, 255, 255, 0.9);
-        border-radius: 14px;
-        box-shadow: 0 5px 16px var(--shadow);
-        border: 1.5px solid rgba(255, 111, 49, 0.35);
-        margin-top: 8px;
-    }
-    .message.user {
-        background: #FF9E3B;
-        padding: 12px 16px;
-        border-radius: 16px 16px 0 16px;
-        margin: 8px 0 8px auto;
-        max-width: 75%;
-        color: #3a1a00;
-        font-weight: 600;
-        font-size: 15px;
-        box-shadow: 2px 2px 8px rgba(255, 110, 30, 0.5);
-    }
-    .message.bot {
-        background: #FFD78A;
-        padding: 12px 16px;
-        border-radius: 16px 16px 16px 0;
-        margin: 8px 0 8px 0;
-        max-width: 75%;
-        color: #2f1b0e;
-        font-weight: 600;
-        font-size: 15px;
-        box-shadow: 2px 2px 8px rgba(255, 150, 50, 0.5);
-    }
-    .timestamp {
-        font-size: 11px;
-        color: #6a542f;
-        margin-top: 6px;
-        text-align: right;
-        user-select: none;
-        opacity: 0.8;
-    }
+    .messages {max-height: 560px; overflow-y: auto; padding: 14px;
+               background: rgba(255, 255, 255, 0.9); border-radius: 14px;
+               box-shadow: 0 5px 16px var(--shadow);
+               border: 1.5px solid rgba(255, 111, 49, 0.35); margin-top: 8px;}
+    .message.user {background: #FF9E3B; padding: 12px 16px;
+                   border-radius: 16px 16px 0 16px; margin: 8px 0 8px auto;
+                   max-width: 75%; color: #3a1a00; font-weight: 600; font-size: 15px;
+                   box-shadow: 2px 2px 8px rgba(255, 110, 30, 0.5);}
+    .message.bot {background: #FFD78A; padding: 12px 16px;
+                  border-radius: 16px 16px 16px 0; margin: 8px 0 8px 0;
+                  max-width: 75%; color: #2f1b0e; font-weight: 600; font-size: 15px;
+                  box-shadow: 2px 2px 8px rgba(255, 150, 50, 0.5);}
+    .timestamp {font-size: 11px; color: #6a542f; margin-top: 6px;
+                text-align: right; user-select: none; opacity: 0.8;}
     div[data-baseweb="input"] > input {
-        background-color: #FFEDD1 !important;
-        color: #2f1b0e !important;
-        border-radius: 10px !important;
-        font-weight: 600;
+        background-color: #FFEDD1 !important; color: #2f1b0e !important;
+        border-radius: 10px !important; font-weight: 600;
     }
-    </style>
-    """, unsafe_allow_html=True)
+    </style>""", unsafe_allow_html=True)
 
 def render_message(text, role, timestamp, idx):
     cls = "user" if role == "user" else "bot"
@@ -138,7 +116,6 @@ def render_message(text, role, timestamp, idx):
 # Personality wrapper (teddy)
 # -------------------------
 def teddy_filter(user_message: str, raw_answer: str, is_first: bool) -> str:
-    # friendly micro-copy, with light sales nudge (without being spammy)
     friendly_prefix = "Hi there, friend! 🧸 " if is_first else ""
     sales_tail = ""
     if any(k in user_message.lower() for k in ["gift", "present", "birthday", "anniversary"]):
@@ -153,10 +130,14 @@ def teddy_filter(user_message: str, raw_answer: str, is_first: bool) -> str:
 def get_engine(api_key, model_name, temperature):
     return HybridEngine(api_key=api_key, model_name=model_name, temperature=temperature)
 
+# -------------------------
+# Main
+# -------------------------
 def main():
     load_css()
-    # --- App shell & header ---
     st.markdown('<div class="app-shell">', unsafe_allow_html=True)
+
+    # --- Header
     colL, colR = st.columns([0.75, 0.25])
     with colL:
         st.markdown(
@@ -167,62 +148,31 @@ def main():
         )
         st.caption("Smart FAQ + fuzzy matching + GPT fallback • Private & deployment-ready")
     with colR:
-        st.markdown('<div class="toolbar">', unsafe_allow_html=True)
-        # toolbar buttons rendered later after we have state
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="toolbar"></div>', unsafe_allow_html=True)
 
-    # --- Keys & model ---
+    # --- Keys & engine
     api_key = get_key("OPENROUTER_API_KEY")
     if not api_key:
         st.error("Missing API key. Set OPENROUTER_API_KEY via env or Streamlit Secrets.")
-        st.markdown("</div>", unsafe_allow_html=True)  # close .app-shell
+        st.markdown("</div>", unsafe_allow_html=True)
         st.stop()
 
-    # Sidebar controls
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        model_choice = st.selectbox(
-            "AI Model",
-            ["deepseek/deepseek-r1:free", "openai/gpt-4o-mini", "anthropic/claude-3-haiku"],
-            index=0
-        )
-        temperature = st.slider("Creativity (Temperature)", 0.1, 1.2, 0.7, 0.1)
-        colA, colB = st.columns(2)
-        with colA:
-            if st.button("Clear Chat"):
-                st.session_state.history = []
-        with colB:
-            if st.button("Reload FAQs"):
-                st.session_state.reload_faqs = True
-
-    # --- State ---
+    # --- State
     if "history" not in st.session_state:
         st.session_state.history = []
     if "reload_faqs" not in st.session_state:
         st.session_state.reload_faqs = False
     if "show_history" not in st.session_state:
-        st.session_state.show_history = True  # default visible
+        st.session_state.show_history = True
 
-    # --- Engine ---
-    engine = get_engine(api_key, model_choice, temperature)
+    engine = get_engine(api_key, "deepseek/deepseek-r1:free", 0.7)
     if st.session_state.reload_faqs:
         st.cache_resource.clear()
-        engine = get_engine(api_key, model_choice, temperature)
+        engine = get_engine(api_key, "deepseek/deepseek-r1:free", 0.7)
         st.session_state.reload_faqs = False
         st.success("FAQs reloaded.")
 
-    # --- Toolbar (top-right) ---
-    tcol1, tcol2, tcol3 = st.columns(3)
-    with tcol1:
-        toggle = st.button(("👁 Hide History" if st.session_state.show_history else "👁 Show History"))
-        if toggle:
-            st.session_state.show_history = not st.session_state.show_history
-    with tcol2:
-        st.button("🗑 Clear", on_click=lambda: st.session_state.update({"history": []}))
-    with tcol3:
-        st.button("🔄 Reload FAQs", on_click=lambda: st.session_state.update({"reload_faqs": True}))
-
-    # --- Chat UI ---
+    # --- Chat UI
     if st.session_state.show_history:
         st.markdown("<div class='messages'>", unsafe_allow_html=True)
         for idx, (role, message, ts) in enumerate(st.session_state.history):
@@ -233,15 +183,12 @@ def main():
         user_msg = st.session_state.input_text.strip()
         if not user_msg:
             return
-        # Save user message
         st.session_state.history.append(("user", user_msg, datetime.now().strftime("%H:%M")))
         engine.add_to_history("user", user_msg)
-        # Generate answer
         with st.spinner("Teddy is thinking... 🐻"):
             raw_answer = engine.answer(user_msg) or "I’m always here to help with our plushies!"
             is_first = (len([r for r, _, _ in st.session_state.history if r == "user"]) == 1)
-            teddy_answer = teddy_filter(user_msg, raw_answer, is_first=is_first)
-        # Save bot answer
+            teddy_answer = teddy_filter(user_msg, raw_answer, is_first)
         st.session_state.history.append(("bot", teddy_answer, datetime.now().strftime("%H:%M")))
         engine.add_to_history("assistant", teddy_answer)
         st.session_state.input_text = ""
@@ -254,8 +201,7 @@ def main():
         label_visibility="collapsed",
     )
 
-    st.markdown("</div>", unsafe_allow_html=True)  # close .app-shell
+    st.markdown("</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
-
