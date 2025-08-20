@@ -97,6 +97,20 @@ def load_css():
         background-color: #FFEDD1 !important; color: #2f1b0e !important;
         border-radius: 10px !important; font-weight: 600;
     }
+
+    /* ========= FIXES FOR THE EXTRA WHITE BARS ========= */
+    /* 1) Hide the chat container if it has no messages (prevents a small white pill) */
+    .messages:not(:has(.message)) { display: none !important; }
+
+    /* 2) If stray text inputs render above, keep only the last text input (your real chat box) */
+    div[data-testid="stTextInput"]:not(:last-of-type) { display: none !important; }
+
+    /* 3) Remove top/bottom page padding that can look like bars on some layouts */
+    .block-container { padding-top: 0 !important; padding-bottom: 0 !important; }
+
+    /* 4) Hide empty spacer blocks Streamlit sometimes injects */
+    section.main > div:empty { display: none !important; }
+    /* ================================================ */
     </style>""", unsafe_allow_html=True)
 
 def render_message(text, role, timestamp, idx):
@@ -139,7 +153,7 @@ def main():
         '<span class="badge">v4.1</span>'
         '</div></div>', unsafe_allow_html=True
     )
-    # 🔴 Removed st.caption() here
+    # 🔴 st.caption() intentionally omitted per your request
 
     # --- Keys & engine
     api_key = get_key("OPENROUTER_API_KEY")
