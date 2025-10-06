@@ -962,7 +962,7 @@ st.markdown("""
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by Tash & Hendrik 🧸</small>
 <br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Complete Version</small>
+<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Fixed Version</small>
 </center>
 """, unsafe_allow_html=True)
 
