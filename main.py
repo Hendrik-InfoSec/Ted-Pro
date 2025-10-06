@@ -14,6 +14,7 @@ from typing import List, Set
 import sqlite3
 import hashlib
 import traceback
+import concurrent.futures
 
 # -----------------------------
 # Setup & Configuration - Streamlit Cloud Compatible
@@ -31,6 +32,22 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]  # Only StreamHandler for cloud compatibility
 )
 logger = logging.getLogger("TedPro")
+
+# -----------------------------
+# Safe Engine Wrapper with Timeout
+# -----------------------------
+def safe_engine_answer(engine, question):
+    """Wrapper with timeout protection around engine calls"""
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(engine.answer, question)
+            return future.result(timeout=25)
+    except concurrent.futures.TimeoutError:
+        logger.error(f"❌ Engine timeout after 25 seconds for: '{question}'")
+        return "Teddy got a bit sleepy waiting for a reply! 🧸 Please try again in a moment."
+    except Exception as e:
+        logger.error(f"❌ Engine error in safe wrapper: {e}")
+        return f"I'm having trouble right now. Please try again! 🧸 (Error: {str(e)})"
 
 # -----------------------------
 # Debug Panel
@@ -51,6 +68,12 @@ def show_debug_panel():
         # Engine status
         if 'engine' in st.session_state:
             st.success("✅ Engine: Initialized")
+            # Debug engine test
+            try:
+                test_response = st.session_state.engine.answer("test")
+                st.success(f"✅ Engine test: Working - '{test_response[:50]}...'")
+            except Exception as e:
+                st.error(f"❌ Engine test failed: {e}")
         else:
             st.error("❌ Engine: Not initialized")
         
@@ -227,7 +250,10 @@ def cached_engine_answer(_engine, question: str) -> str:
         normalized = question.lower().strip()
         logger.debug(f"📤 Sending to engine: '{normalized}'")
         
-        response = _engine.answer(normalized)
+        # Use safe wrapper instead of direct engine call
+        logger.info("🟢 Sending to engine...")
+        response = safe_engine_answer(_engine, normalized)
+        logger.info("🟢 Engine returned!")
         
         processing_time = time.time() - start_time
         logger.info(f"✅ Engine response received in {processing_time:.2f}s: '{response[:100]}...'")
@@ -367,6 +393,18 @@ try:
     start_time = time.time()
     
     engine = HybridEngine(api_key=api_key, client_id=client_id)
+    
+    # Debug engine initialization
+    logger.info(f"🔧 Engine initialized: {engine is not None}")
+    logger.info(f"🔧 API key length: {len(api_key) if api_key else 0}")
+    
+    # Test engine immediately
+    try:
+        logger.info("🧪 Testing engine with simple query...")
+        test_response = engine.answer("test")
+        logger.info(f"🧪 Engine test response: '{test_response}'")
+    except Exception as e:
+        logger.error(f"🧪 Engine test failed: {e}")
     
     init_time = time.time() - start_time
     logger.info(f"✅ HybridEngine initialized successfully in {init_time:.2f}s")
@@ -962,7 +1000,7 @@ st.markdown("""
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by Tash & Hendrik 🧸</small>
 <br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Fixed Version</small>
+<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Debug Enhanced</small>
 </center>
 """, unsafe_allow_html=True)
 
