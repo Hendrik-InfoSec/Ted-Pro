@@ -13,6 +13,7 @@ import logging
 from typing import List, Set
 import sqlite3
 import hashlib
+import traceback
 
 # -----------------------------
 # Setup & Configuration
@@ -23,65 +24,113 @@ st.set_page_config(
     layout="centered"
 )
 
-# Configure logging - Streamlit Cloud compatible
+# Configure logging - Streamlit Cloud compatible with DEBUG level
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler()  # Only stream handler for Cloud
+        logging.StreamHandler()
     ]
 )
+logger = logging.getLogger("TedPro")
+
+# -----------------------------
+# Debug Panel - Added for troubleshooting
+# -----------------------------
+def show_debug_panel():
+    """Show debug information in sidebar"""
+    with st.sidebar.expander("🔧 Debug Panel", expanded=True):
+        st.write("**API Status:**")
+        
+        # Check API key
+        api_key = get_key("OPENROUTER_API_KEY")
+        if api_key:
+            masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+            st.success(f"✅ API Key: {masked_key}")
+        else:
+            st.error("❌ API Key: MISSING")
+        
+        # Engine status
+        if 'engine' in globals():
+            st.success("✅ Engine: Initialized")
+        else:
+            st.error("❌ Engine: Not initialized")
+        
+        # Database status
+        try:
+            db_path = Path("/tmp") / f"{client_id}_chat_data.db"
+            if db_path.exists():
+                st.success("✅ Database: Connected")
+            else:
+                st.warning("⚠️ Database: Not created yet")
+        except:
+            st.error("❌ Database: Error")
+        
+        # Session info
+        st.write("**Session Info:**")
+        st.write(f"Session ID: {st.session_state.get('session_id', 'None')}")
+        st.write(f"Messages: {len(st.session_state.get('chat_history', []))}")
+        
+        # Clear cache button
+        if st.button("🔄 Clear Cache"):
+            st.cache_data.clear()
+            st.rerun()
 
 # -----------------------------
 # Database Setup for Performance - Streamlit Cloud Fixed
 # -----------------------------
 def init_database():
     """Initialize SQLite database for better performance"""
+    logger.info("Initializing database...")
     # Use /tmp directory which has write permissions on Streamlit Cloud
     db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-    # No need to create directories for /tmp
     
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    
-    # Conversations table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS conversations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            session_id TEXT NOT NULL
-        )
-    ''')
-    
-    # Analytics table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS analytics (
-            key TEXT PRIMARY KEY,
-            value INTEGER DEFAULT 0,
-            updated_at TEXT NOT NULL
-        )
-    ''')
-    
-    # Leads table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS leads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            context TEXT NOT NULL,
-            timestamp TEXT NOT NULL
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Conversations table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                session_id TEXT NOT NULL
+            )
+        ''')
+        
+        # Analytics table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS analytics (
+                key TEXT PRIMARY KEY,
+                value INTEGER DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+        ''')
+        
+        # Leads table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                context TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        logger.info("✅ Database initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        raise
 
 def append_to_conversation_db(role, content, session_id):
     """Append message to database (more efficient than JSON)"""
     try:
-        db_path = Path("/tmp") / f"{client_id}_chat_data.db"  # Fixed path
+        db_path = Path("/tmp") / f"{client_id}_chat_data.db"
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
@@ -103,13 +152,14 @@ def append_to_conversation_db(role, content, session_id):
         
         conn.commit()
         conn.close()
+        logger.debug(f"📝 Saved message to DB: {role} - {content[:50]}...")
     except Exception as e:
-        logging.error(f"Database error: {e}")
+        logger.error(f"Database error: {e}")
 
 def load_recent_conversation_db(session_id, limit=50):
     """Load recent conversation from database"""
     try:
-        db_path = Path("/tmp") / f"{client_id}_chat_data.db"  # Fixed path
+        db_path = Path("/tmp") / f"{client_id}_chat_data.db"
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
@@ -127,14 +177,22 @@ def load_recent_conversation_db(session_id, limit=50):
         # Return in chronological order
         return [{"role": msg[0], "content": msg[1], "timestamp": msg[2]} for msg in reversed(messages)]
     except Exception as e:
-        logging.error(f"Database load error: {e}")
+        logger.error(f"Database load error: {e}")
         return []
 
 # -----------------------------
 # Core Functions
 # -----------------------------
 def get_key(name: str):
-    return os.getenv(name) or st.secrets.get(name)
+    """Get API key with detailed logging"""
+    env_value = os.getenv(name)
+    secret_value = st.secrets.get(name)
+    
+    logger.debug(f"🔑 Key lookup - {name}:")
+    logger.debug(f"  Environment: {'✅ Found' if env_value else '❌ Not found'}")
+    logger.debug(f"  Secrets: {'✅ Found' if secret_value else '❌ Not found'}")
+    
+    return secret_value or env_value
 
 def extract_email(text: str):
     """Robust email validation using fullmatch"""
@@ -162,17 +220,31 @@ def format_timestamp(timestamp_str):
     except (ValueError, TypeError):
         return datetime.now().strftime("%H:%M")
 
-# Enhanced caching with better error handling
+# Enhanced caching with better error handling and DEBUG logging
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_engine_answer(_engine, question: str) -> str:
+    logger.info(f"🔍 Engine processing question: '{question}'")
+    start_time = time.time()
+    
     try:
         normalized = question.lower().strip()
-        return _engine.answer(normalized)
+        logger.debug(f"📤 Sending to engine: '{normalized}'")
+        
+        response = _engine.answer(normalized)
+        
+        processing_time = time.time() - start_time
+        logger.info(f"✅ Engine response received in {processing_time:.2f}s: '{response[:100]}...'")
+        
+        return response
     except Exception as e:
-        logging.error(f"Engine error: {e}")
-        return f"I'm having trouble right now. Please try again! 🧸"
+        processing_time = time.time() - start_time
+        logger.error(f"❌ Engine error after {processing_time:.2f}s: {str(e)}")
+        logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
+        return f"I'm having trouble right now. Please try again! 🧸 (Error: {str(e)})"
 
 def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captured: bool) -> str:
+    logger.debug(f"🎭 Applying teddy filter - First: {is_first}, Lead captured: {lead_captured}")
+    
     friendly_prefix = "Hi there, friend! 🧸 " if is_first else ""
     sales_tail = ""
     
@@ -202,7 +274,7 @@ def get_analytics():
         "sales_related": 0, "order_tracking": 0, "total_sessions": 0
     }
     try:
-        db_path = Path("/tmp") / f"{client_id}_chat_data.db"  # Fixed path
+        db_path = Path("/tmp") / f"{client_id}_chat_data.db"
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
@@ -213,7 +285,7 @@ def get_analytics():
         db_analytics = {row[0]: row[1] for row in results}
         return {**default, **db_analytics}
     except Exception as e:
-        logging.error(f"Analytics load error: {e}")
+        logger.error(f"Analytics load error: {e}")
         return default
 
 def update_analytics_batch(updates, immediate=False):
@@ -229,7 +301,7 @@ def update_analytics_batch(updates, immediate=False):
             # Flush if immediate or batch is large
             if immediate or sum(_analytics_batch.values()) >= 10:
                 if _analytics_batch:
-                    db_path = Path("/tmp") / f"{client_id}_chat_data.db"  # Fixed path
+                    db_path = Path("/tmp") / f"{client_id}_chat_data.db"
                     conn = sqlite3.connect(db_path)
                     cursor = conn.cursor()
                     
@@ -252,30 +324,73 @@ def update_analytics_batch(updates, immediate=False):
                             current[key] = current.get(key, 0) + increment
                         st.session_state.analytics = current
                     
+                    logger.debug(f"📊 Analytics updated: {_analytics_batch}")
                     _analytics_batch = {}
                     
     except Exception as e:
-        logging.error(f"Analytics update error: {e}")
+        logger.error(f"Analytics update error: {e}")
 
 # -----------------------------
-# Engine Initialization
+# Engine Initialization with DEBUG logging
 # -----------------------------
+logger.info("🚀 Starting TedPro initialization...")
+
 api_key = get_key("OPENROUTER_API_KEY")
 if not api_key:
-    st.error("🔑 Missing OPENROUTER_API_KEY. Set it in environment variables or Streamlit secrets.")
+    logger.error("❌ CRITICAL: OPENROUTER_API_KEY not found!")
+    st.error("""
+    🔑 **API Key Missing!**
+    
+    **To fix this:**
+    
+    1. **Get API key** from [OpenRouter](https://openrouter.ai/keys)
+    2. **Add to Streamlit Secrets:**
+       - Go to app settings → Secrets
+       - Add: `OPENROUTER_API_KEY = "your-key-here"`
+    3. **Redeploy** the app
+    """)
     st.stop()
+
+logger.info("✅ API key found, initializing engine...")
 
 client_id = "tedpro_client"
 
 # Initialize database
-init_database()
-
 try:
-    engine = HybridEngine(api_key=api_key, client_id=client_id)
+    init_database()
+    logger.info("✅ Database initialized")
 except Exception as e:
-    logging.error(f"Engine initialization failed: {e}")
-    st.error(f"❌ Failed to initialize chatbot engine: {e}")
+    logger.error(f"❌ Database initialization failed: {e}")
+    st.error(f"Database error: {e}")
     st.stop()
+
+# Initialize engine with timeout and error handling
+try:
+    logger.info("🔄 Initializing HybridEngine...")
+    start_time = time.time()
+    
+    engine = HybridEngine(api_key=api_key, client_id=client_id)
+    
+    init_time = time.time() - start_time
+    logger.info(f"✅ HybridEngine initialized successfully in {init_time:.2f}s")
+    
+except Exception as e:
+    logger.error(f"❌ Engine initialization failed: {str(e)}")
+    logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
+    st.error(f"""
+    ❌ **Engine Initialization Failed!**
+    
+    **Error:** {str(e)}
+    
+    **Check:**
+    1. Is your OpenRouter API key valid?
+    2. Does your account have credits?
+    3. Check the logs for more details
+    """)
+    st.stop()
+
+# Show debug panel
+show_debug_panel()
 
 # -----------------------------
 # UI Styling - Enhanced Performance
@@ -432,6 +547,15 @@ body {
     50% { border-color: #FF922B; }
     100% { border-color: #FFA94D; }
 }
+.debug-panel {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    padding: 10px;
+    margin: 10px 0;
+    font-family: monospace;
+    font-size: 12px;
+}
 /* Mobile optimizations */
 @media (max-width: 768px) {
     .quick-questions-grid {
@@ -480,6 +604,7 @@ setInterval(scrollToBottom, 400);
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
     update_analytics_batch({"total_sessions": 1}, immediate=True)
+    logger.info(f"🆕 New session started: {st.session_state.session_id}")
 
 # Centralized state initialization with enhanced tracking
 default_states = {
@@ -511,6 +636,8 @@ for key, default_value in default_states.items():
                     st.session_state.chat_history.append({"bot": msg["content"], "timestamp": msg["timestamp"]})
         else:
             st.session_state[key] = default_value
+
+logger.debug(f"🔄 Session state initialized: {len(st.session_state.chat_history)} messages in history")
 
 def render_chat_container(show_typing=False):
     """Smooth chat rendering with container management"""
@@ -601,6 +728,7 @@ if st.sidebar.button(
                     st.session_state.sidebar_name = ""
                     st.session_state.sidebar_email = ""
                     st.sidebar.success("🎉 You're subscribed! We'll send the catalog soon.")
+                    logger.info(f"📧 Lead captured: {name} <{extracted_email}>")
                     # Force UI update
                     st.rerun()
                 else:
@@ -671,6 +799,7 @@ if should_show_quick_questions and not st.session_state.processing_active:
         
         if submitted and selected_question:
             st.session_state.selected_quick_question = selected_question
+            logger.info(f"🎯 Quick question selected: {selected_question}")
 
 # -----------------------------
 # Smart Lead Banner - Shows at strategic intervals
@@ -699,7 +828,7 @@ if should_show_lead_banner():
     st.session_state.last_lead_banner_shown = st.session_state.user_message_count
 
 # -----------------------------
-# Performance-Optimized Message Processing
+# Performance-Optimized Message Processing with DEBUG logging
 # -----------------------------
 def process_message(user_input):
     """Optimized message processing with enhanced features"""
@@ -713,6 +842,8 @@ def process_message(user_input):
     
     st.session_state.processing_active = True
     st.session_state.last_processed_time = current_time
+    
+    logger.info(f"🔄 Processing message: '{user_input}'")
     
     try:
         # Track user message count for lead banner logic
@@ -747,8 +878,9 @@ def process_message(user_input):
                     analytics_updates["lead_captures"] = 1
                     st.session_state.captured_emails.add(extracted_email)
                     st.session_state.lead_captured = True
+                    logger.info(f"📧 Auto-captured lead: {extracted_name} <{extracted_email}>")
                 except Exception as e:
-                    logging.error(f"Lead capture error: {e}")
+                    logger.error(f"Lead capture error: {e}")
                     st.session_state.last_error = str(e)
         
         # Clear and re-render chat container with typing indicator
@@ -784,11 +916,15 @@ def process_message(user_input):
             if processing_time < min_display_time:
                 time.sleep(min_display_time - processing_time)
                 
+            logger.info(f"✅ Message processed successfully in {processing_time:.2f}s")
+                
         except Exception as e:
-            logging.error(f"Message processing error: {e}")
+            processing_time = time.time() - start_time
+            logger.error(f"❌ Message processing error after {processing_time:.2f}s: {str(e)}")
+            logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
             st.session_state.last_error = str(e)
             error_message_data = {
-                "bot": "I'm having a little trouble right now. Please try again soon! 🧸", 
+                "bot": f"I'm having a little trouble right now. Please try again soon! 🧸 (Error: {str(e)})", 
                 "timestamp": datetime.now().isoformat()
             }
             st.session_state.chat_history.append(error_message_data)
@@ -799,6 +935,7 @@ def process_message(user_input):
         
     finally:
         st.session_state.processing_active = False
+        logger.debug("🔄 Message processing completed")
 
 # Main chat rendering
 if st.session_state.show_history:
@@ -815,12 +952,14 @@ else:
 
 # Process selected quick question
 if st.session_state.selected_quick_question and not st.session_state.processing_active:
+    logger.info(f"🎯 Processing quick question: {st.session_state.selected_quick_question}")
     process_message(st.session_state.selected_quick_question)
     st.session_state.selected_quick_question = None
 
 # Process regular chat input
 user_input = st.chat_input("Ask me about plushies, pricing, shipping, or anything else! 🧸")
 if user_input and not st.session_state.processing_active:
+    logger.info(f"💬 User input received: {user_input}")
     process_message(user_input)
 
 # Flush any remaining analytics batches at the end
@@ -835,6 +974,8 @@ st.markdown("""
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by Tash & Hendrik 🧸</small>
 <br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Production Optimized</small>
+<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Debug Enabled</small>
 </center>
 """, unsafe_allow_html=True)
+
+logger.info("🏁 TedPro application loaded successfully")
