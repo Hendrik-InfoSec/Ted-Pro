@@ -6,15 +6,21 @@ import requests
 import logging
 from typing import Dict, List, Optional
 import hashlib
+import time
+from datetime import datetime
+import random
 
 class HybridEngine:
     def __init__(self, api_key: str, client_id: str):
         self.api_key = api_key
         self.client_id = client_id
-        self.client_path = Path(f"clients/{client_id}")
+        # Use /tmp directory for Streamlit Cloud compatibility
+        self.client_path = Path("/tmp") / client_id
         self.client_path.mkdir(parents=True, exist_ok=True)
         self.knowledge_base = self.load_knowledge_base()
         self.conversation_history = []
+        self.logger = logging.getLogger("HybridEngine")
+        self.logger.info(f"🔧 HybridEngine initialized with API key: {bool(api_key)}")
         
     def load_knowledge_base(self) -> Dict:
         """Load FAQ and knowledge base"""
@@ -32,22 +38,31 @@ class HybridEngine:
             json.dump(self.knowledge_base, f, indent=2)
     
     def answer(self, question: str) -> str:
-        """Generate answer using hybrid approach"""
+        """Generate answer using hybrid approach - ACTUALLY CALLS OPENROUTER"""
+        self.logger.info(f"🔍 Processing question: '{question}'")
+        start_time = time.time()
+        
         try:
             # First try local knowledge base
             local_answer = self.search_local_knowledge(question)
             if local_answer:
+                self.logger.info("✅ Using local knowledge base answer")
                 return local_answer
             
-            # Fallback to API if available
-            if self.api_key and self.api_key != "your-api-key-here":
-                return self.get_api_answer(question)
-            else:
-                return self.get_fallback_answer(question)
+            self.logger.info("🌐 No local match, calling OpenRouter API...")
+            
+            # ACTUAL API CALL to OpenRouter
+            api_response = self.get_api_answer(question)
+            
+            response_time = time.time() - start_time
+            self.logger.info(f"✅ OpenRouter API response received in {response_time:.2f}s")
+            
+            return api_response
                 
         except Exception as e:
-            logging.error(f"Answer generation error: {e}")
-            return "I'm having trouble connecting to my knowledge base. Please try again later! 🧸"
+            response_time = time.time() - start_time
+            self.logger.error(f"❌ Error after {response_time:.2f}s: {str(e)}")
+            return self.get_fallback_answer(question)
     
     def search_local_knowledge(self, question: str) -> Optional[str]:
         """Search local FAQ and knowledge base"""
@@ -66,28 +81,89 @@ class HybridEngine:
         return None
     
     def get_api_answer(self, question: str) -> str:
-        """Get answer from external API"""
+        """ACTUAL OpenRouter API call with proper error handling"""
+        self.logger.info(f"📡 Making OpenRouter API request...")
+        
         try:
-            # This would be your actual API call
-            # For now, return a placeholder
-            return "I'd be happy to help with that! Based on your question, I recommend checking our product catalog in the sidebar. 🧸"
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://ted-pro.streamlit.app",  # Required by OpenRouter
+                "X-Title": "TedPro Assistant"  # Required by OpenRouter
+            }
+            
+            data = {
+                "model": "openai/gpt-3.5-turbo",  # You can change this to other models
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are TedPro, a friendly plushie marketing assistant for a company called CuddleHeroes. 
+
+About CuddleHeroes:
+- We sell high-quality plushies and stuffed animals
+- We offer customization options (embroidery, colors, sizes)
+- We ship internationally
+- We have a 30-day return policy
+- We offer gift wrapping and personalized notes
+
+Your personality:
+- Warm, friendly, and enthusiastic about plushies 🧸
+- Helpful and informative about products
+- Gently promotional when appropriate
+- Use emojis occasionally to be engaging
+
+Keep responses concise but helpful. If you don't know specific details, suggest checking the website or contacting support."""
+                    },
+                    {
+                        "role": "user", 
+                        "content": question
+                    }
+                ],
+                "max_tokens": 500,
+                "temperature": 0.7
+            }
+            
+            self.logger.info(f"🔑 Using API key: {self.api_key[:10]}...")
+            self.logger.info(f"📤 Sending request to: {url}")
+            
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            self.logger.info(f"📥 Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                answer = result['choices'][0]['message']['content']
+                self.logger.info(f"✅ API success: {answer[:100]}...")
+                return answer
+            else:
+                self.logger.error(f"❌ API error {response.status_code}: {response.text}")
+                return f"I'm having trouble connecting right now. Please try again! (API Error: {response.status_code})"
+                
+        except requests.exceptions.Timeout:
+            self.logger.error("⏰ API request timed out")
+            return "I'm taking a bit longer than usual to respond. Please try again! 🧸"
+        except requests.exceptions.ConnectionError:
+            self.logger.error("🔌 API connection error")
+            return "I'm having trouble connecting to my knowledge base. Please check your internet connection! 🧸"
         except Exception as e:
-            logging.error(f"API call failed: {e}")
-            return self.get_fallback_answer(question)
+            self.logger.error(f"❌ Unexpected API error: {str(e)}")
+            return f"I encountered an unexpected error: {str(e)}. Please try again! 🧸"
     
     def get_fallback_answer(self, question: str) -> str:
-        """Fallback answer when no specific match found"""
+        """Fallback answer when API fails"""
         fallback_responses = [
-            "I'm a friendly plushie assistant! I can help with product info, pricing, shipping, and more. What would you like to know? 🧸",
-            "Thanks for your question! I specialize in helping with plushie products and orders. Feel free to ask me anything!",
-            "I'd love to help you with that! You can also check our product catalog in the sidebar for more details. 🎁"
+            "I'd love to help with that! Let me check my resources and get back to you with the best information. 🧸",
+            "That's a great question! I'm here to help with all things plushies. Let me find the perfect answer for you. 🎁",
+            "Thanks for your question! I specialize in plushie products and would be happy to assist you. 💫",
+            "I'm currently experiencing some technical difficulties. Please try again in a moment! 🧸"
         ]
         return random.choice(fallback_responses)
     
     def add_lead(self, name: str, email: str, context: str = "chat_capture"):
         """Add a new lead to the database"""
         try:
-            db_path = self.client_path / "chat_data.db"
+            # Use /tmp directory for Streamlit Cloud compatibility
+            db_path = Path("/tmp") / f"{self.client_id}_chat_data.db"
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
@@ -98,13 +174,14 @@ class HybridEngine:
             
             conn.commit()
             conn.close()
-            logging.info(f"Lead captured: {name} <{email}>")
+            self.logger.info(f"📧 Lead captured: {name} <{email}>")
             
         except Exception as e:
-            logging.error(f"Lead capture error: {e}")
+            self.logger.error(f"Lead capture error: {e}")
             raise
 
     def learn_from_interaction(self, question: str, answer: str, feedback: Optional[str] = None):
         """Learn from user interactions to improve responses"""
         # This would be your learning logic
-        pass
+        # For now, just log the interaction
+        self.logger.debug(f"Learning from interaction - Q: {question}, A: {answer}, Feedback: {feedback}")
