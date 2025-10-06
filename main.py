@@ -16,7 +16,7 @@ import hashlib
 import traceback
 
 # -----------------------------
-# Setup & Configuration
+# Setup & Configuration - Streamlit Cloud Compatible
 # -----------------------------
 st.set_page_config(
     page_title="TedPro Marketing Assistant 🧸",
@@ -24,22 +24,20 @@ st.set_page_config(
     layout="centered"
 )
 
-# Configure logging - Streamlit Cloud compatible with DEBUG level
+# Configure logging - Streamlit Cloud compatible (NO FileHandler)
 logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]  # Only StreamHandler for cloud compatibility
 )
 logger = logging.getLogger("TedPro")
 
 # -----------------------------
-# Debug Panel - Added for troubleshooting
+# Debug Panel
 # -----------------------------
 def show_debug_panel():
     """Show debug information in sidebar"""
-    with st.sidebar.expander("🔧 Debug Panel", expanded=True):
+    with st.sidebar.expander("🔧 Debug Panel", expanded=False):
         st.write("**API Status:**")
         
         # Check API key
@@ -51,7 +49,7 @@ def show_debug_panel():
             st.error("❌ API Key: MISSING")
         
         # Engine status
-        if 'engine' in globals():
+        if 'engine' in st.session_state:
             st.success("✅ Engine: Initialized")
         else:
             st.error("❌ Engine: Not initialized")
@@ -77,7 +75,7 @@ def show_debug_panel():
             st.rerun()
 
 # -----------------------------
-# Database Setup for Performance - Streamlit Cloud Fixed
+# Database Setup for Performance
 # -----------------------------
 def init_database():
     """Initialize SQLite database for better performance"""
@@ -128,7 +126,7 @@ def init_database():
         raise
 
 def append_to_conversation_db(role, content, session_id):
-    """Append message to database (more efficient than JSON)"""
+    """Append message to database"""
     try:
         db_path = Path("/tmp") / f"{client_id}_chat_data.db"
         conn = sqlite3.connect(db_path)
@@ -220,7 +218,6 @@ def format_timestamp(timestamp_str):
     except (ValueError, TypeError):
         return datetime.now().strftime("%H:%M")
 
-# Enhanced caching with better error handling and DEBUG logging
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_engine_answer(_engine, question: str) -> str:
     logger.info(f"🔍 Engine processing question: '{question}'")
@@ -262,7 +259,7 @@ def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captur
     return f"{friendly_prefix}{raw_answer}{sales_tail}"
 
 # -----------------------------
-# Performance-Optimized Analytics with Batch Support - Fixed for Cloud
+# Analytics with Batch Support
 # -----------------------------
 _analytics_lock = threading.Lock()
 _analytics_batch = {}
@@ -331,7 +328,7 @@ def update_analytics_batch(updates, immediate=False):
         logger.error(f"Analytics update error: {e}")
 
 # -----------------------------
-# Engine Initialization with DEBUG logging
+# Engine Initialization
 # -----------------------------
 logger.info("🚀 Starting TedPro initialization...")
 
@@ -364,7 +361,7 @@ except Exception as e:
     st.error(f"Database error: {e}")
     st.stop()
 
-# Initialize engine with timeout and error handling
+# Initialize engine
 try:
     logger.info("🔄 Initializing HybridEngine...")
     start_time = time.time()
@@ -373,6 +370,9 @@ try:
     
     init_time = time.time() - start_time
     logger.info(f"✅ HybridEngine initialized successfully in {init_time:.2f}s")
+    
+    # Store engine in session state for persistence
+    st.session_state.engine = engine
     
 except Exception as e:
     logger.error(f"❌ Engine initialization failed: {str(e)}")
@@ -598,15 +598,14 @@ setInterval(scrollToBottom, 400);
 """, unsafe_allow_html=True)
 
 # -----------------------------
-# Session State & Storage
+# Session State Initialization
 # -----------------------------
-# Initialize session state with session tracking
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
     update_analytics_batch({"total_sessions": 1}, immediate=True)
     logger.info(f"🆕 New session started: {st.session_state.session_id}")
 
-# Centralized state initialization with enhanced tracking
+# Initialize session state
 default_states = {
     "chat_history": [],
     "show_history": False,
@@ -681,12 +680,12 @@ def render_chat_container(show_typing=False):
     return chat_container
 
 # -----------------------------
-# Sidebar - Optimized with Instant Clear
+# Sidebar
 # -----------------------------
 st.sidebar.markdown("### 🧸 TedPro Assistant")
 st.sidebar.markdown("Your friendly plushie expert!")
 
-# Real-time analytics badges
+# Analytics
 st.sidebar.markdown("### 📊 Live Analytics")
 col1, col2 = st.sidebar.columns(2)
 with col1:
@@ -694,7 +693,6 @@ with col1:
 with col2: 
     st.metric("Leads", st.session_state.analytics.get("lead_captures", 0))
 
-# Detailed analytics expander
 with st.sidebar.expander("📈 Detailed Metrics"):
     st.metric("FAQ Answers", st.session_state.analytics.get("faq_questions", 0))
     st.metric("Sales Inquiries", st.session_state.analytics.get("sales_related", 0))
@@ -706,7 +704,6 @@ st.sidebar.markdown("### 💌 Get Our Plush Catalog")
 name = st.sidebar.text_input("Your Name", key="sidebar_name")
 email = st.sidebar.text_input("Your Email", key="sidebar_email")
 
-# Disable subscribe button after success
 subscribe_disabled = st.session_state.lead_captured
 
 if st.sidebar.button(
@@ -718,23 +715,20 @@ if st.sidebar.button(
         extracted_email = extract_email(email)
         if extracted_email:
             try:
-                # Check if this email was already captured
                 if extracted_email not in st.session_state.captured_emails:
                     engine.add_lead(name, extracted_email, context="sidebar_signup")
                     st.session_state.captured_emails.add(extracted_email)
                     update_analytics_batch({"lead_captures": 1})
                     st.session_state.lead_captured = True
-                    # Clear inputs instantly
                     st.session_state.sidebar_name = ""
                     st.session_state.sidebar_email = ""
                     st.sidebar.success("🎉 You're subscribed! We'll send the catalog soon.")
                     logger.info(f"📧 Lead captured: {name} <{extracted_email}>")
-                    # Force UI update
                     st.rerun()
                 else:
                     st.sidebar.info("📧 You're already subscribed with this email!")
             except Exception as e:
-                logging.error(f"Lead capture error: {e}")
+                logger.error(f"Lead capture error: {e}")
                 st.sidebar.error(f"Failed to save subscription: {e}")
         else:
             st.sidebar.warning("Please enter a valid email address.")
@@ -744,7 +738,6 @@ if st.sidebar.button(
 # -----------------------------
 # Main Chat Interface
 # -----------------------------
-# Header with analytics badge and history toggle
 col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
 with col1:
     st.markdown('<h1 style="color:#FF922B;">TedPro Marketing Assistant 🧸</h1>', unsafe_allow_html=True)
@@ -764,7 +757,7 @@ with col4:
 st.markdown('<p style="color:#5A3A1B;">Here to help with products, shipping, or special offers!</p>', unsafe_allow_html=True)
 
 # -----------------------------
-# Quick Questions Form - Atomic Selection
+# Quick Questions
 # -----------------------------
 should_show_quick_questions = (
     st.session_state.show_quick_questions or 
@@ -782,11 +775,9 @@ if should_show_quick_questions and not st.session_state.processing_active:
         "Do you offer discounts?", "What sizes are available?"
     ]
     
-    # Use form for atomic selection to prevent multiple triggers
     with st.form("quick_questions_form"):
         st.markdown('<div class="quick-questions-form">', unsafe_allow_html=True)
         
-        # Create radio buttons for single selection
         selected_question = st.radio(
             "Choose a question:",
             quick_questions,
@@ -802,7 +793,7 @@ if should_show_quick_questions and not st.session_state.processing_active:
             logger.info(f"🎯 Quick question selected: {selected_question}")
 
 # -----------------------------
-# Smart Lead Banner - Shows at strategic intervals
+# Lead Banner
 # -----------------------------
 def should_show_lead_banner():
     """Determine if lead banner should be shown based on message count"""
@@ -824,11 +815,10 @@ if should_show_lead_banner():
     <p style='margin:0;font-style:italic;color:#8B5A2B'>Just ask about our products or drop your email in the sidebar →</p>
     </div>
     """, unsafe_allow_html=True)
-    # Update last shown counter
     st.session_state.last_lead_banner_shown = st.session_state.user_message_count
 
 # -----------------------------
-# Performance-Optimized Message Processing with DEBUG logging
+# Message Processing
 # -----------------------------
 def process_message(user_input):
     """Optimized message processing with enhanced features"""
@@ -854,10 +844,9 @@ def process_message(user_input):
         st.session_state.chat_history.append(user_message_data)
         append_to_conversation_db("user", user_input, st.session_state.session_id)
         
-        # Batch analytics updates (not immediate for performance)
+        # Analytics updates
         analytics_updates = {"total_messages": 1}
         
-        # Track sales and order intent
         user_input_lower = user_input.lower()
         if any(k in user_input_lower for k in ["price", "buy", "order", "cost", "purchase"]):
             analytics_updates["sales_related"] = 1
@@ -871,7 +860,6 @@ def process_message(user_input):
         if not st.session_state.lead_captured:
             extracted_email = extract_email(user_input)
             if extracted_email and extracted_email not in st.session_state.captured_emails:
-                # Try to extract name from the message
                 extracted_name = extract_name(user_input)
                 try:
                     engine.add_lead(extracted_name, extracted_email, context="chat_auto_capture")
@@ -930,7 +918,7 @@ def process_message(user_input):
             st.session_state.chat_history.append(error_message_data)
             append_to_conversation_db("assistant", error_message_data["bot"], st.session_state.session_id)
         
-        # Batch update analytics (not immediate for performance)
+        # Update analytics
         update_analytics_batch(analytics_updates)
         
     finally:
@@ -950,7 +938,7 @@ else:
     elif not st.session_state.show_quick_questions:
         st.info("💬 Start a conversation or click '💡 Quick Q's' for common questions!")
 
-# Process selected quick question
+# Process quick question
 if st.session_state.selected_quick_question and not st.session_state.processing_active:
     logger.info(f"🎯 Processing quick question: {st.session_state.selected_quick_question}")
     process_message(st.session_state.selected_quick_question)
@@ -962,7 +950,7 @@ if user_input and not st.session_state.processing_active:
     logger.info(f"💬 User input received: {user_input}")
     process_message(user_input)
 
-# Flush any remaining analytics batches at the end
+# Flush analytics
 update_analytics_batch({}, immediate=True)
 
 # -----------------------------
@@ -974,7 +962,7 @@ st.markdown("""
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by Tash & Hendrik 🧸</small>
 <br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Debug Enabled</small>
+<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Complete Version</small>
 </center>
 """, unsafe_allow_html=True)
 
