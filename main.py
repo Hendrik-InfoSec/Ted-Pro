@@ -16,6 +16,7 @@ import hashlib
 import traceback
 from rich.logging import RichHandler
 from rich.traceback import install as install_rich_traceback
+import pandas as pd
 
 # Install rich traceback for better error formatting
 install_rich_traceback()
@@ -26,73 +27,44 @@ install_rich_traceback()
 st.set_page_config(
     page_title="TedPro Marketing Assistant 🧸",
     page_icon="🧸",
-    layout="centered"
+    layout="centered",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://cuddleheroes.example.com/support',
+        'Report a bug': 'https://cuddleheroes.example.com/bugs',
+        'About': 'TedPro: Your friendly plushie assistant by CuddleHeros!'
+    }
 )
 
 # Configure logging with rich - Streamlit Cloud compatible
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[RichHandler(rich_tracebacks=True)]  # Use RichHandler for pretty logs
+    handlers=[RichHandler(rich_tracebacks=True)]
 )
 logger = logging.getLogger("TedPro")
 
 # -----------------------------
-# Debug Panel
+# Database Setup with Connection Pooling
 # -----------------------------
-def show_debug_panel():
-    """Show debug information in sidebar"""
-    with st.sidebar.expander("🔧 Debug Panel", expanded=False):
-        st.write("**API Status:**")
-        
-        # Check API key
-        api_key = get_key("OPENROUTER_API_KEY")
-        if api_key:
-            masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
-            st.success(f"✅ API Key: {masked_key}")
-        else:
-            st.error("❌ API Key: MISSING")
-        
-        # Engine status
-        if 'engine' in st.session_state:
-            st.success("✅ Engine: Initialized")
-        else:
-            st.error("❌ Engine: Not initialized")
-        
-        # Database status
+def get_db_connection():
+    """Get SQLite connection with pooling and timeout"""
+    db_path = Path("/tmp") / f"{client_id}_chat_data.db"
+    for attempt in range(3):
         try:
-            db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-            if db_path.exists():
-                st.success("✅ Database: Connected")
-            else:
-                st.warning("⚠️ Database: Not created yet")
-        except:
-            st.error("❌ Database: Error")
-        
-        # Session info
-        st.write("**Session Info:**")
-        st.write(f"Session ID: {st.session_state.get('session_id', 'None')}")
-        st.write(f"Messages: {len(st.session_state.get('chat_history', []))}")
-        
-        # Clear cache button
-        if st.button("🔄 Clear Cache"):
-            st.cache_data.clear()
-            st.rerun()
+            conn = sqlite3.connect(db_path, timeout=10)
+            return conn
+        except sqlite3.OperationalError as e:
+            logger.warning(f"DB connection attempt {attempt+1} failed: {e}")
+            time.sleep(0.5)
+    raise sqlite3.OperationalError("Failed to connect to database after retries")
 
-# -----------------------------
-# Database Setup for Performance
-# -----------------------------
 def init_database():
     """Initialize SQLite database for better performance"""
     logger.info("Initializing database...")
-    # Use /tmp directory which has write permissions on Streamlit Cloud
-    db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-    
     try:
-        with sqlite3.connect(db_path) as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
-        
-            # Conversations table with index for faster queries
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS conversations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,8 +75,6 @@ def init_database():
                 )
             ''')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_session_timestamp ON conversations (session_id, timestamp)')
-        
-            # Analytics table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS analytics (
                     key TEXT PRIMARY KEY,
@@ -112,8 +82,6 @@ def init_database():
                     updated_at TEXT NOT NULL
                 )
             ''')
-        
-            # Leads table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS leads (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,7 +91,6 @@ def init_database():
                     timestamp TEXT NOT NULL
                 )
             ''')
-        
             conn.commit()
         logger.info("✅ Database initialized successfully")
     except Exception as e:
@@ -133,16 +100,12 @@ def init_database():
 def append_to_conversation_db(role: str, content: str, session_id: str):
     """Append message to database"""
     try:
-        db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-        with sqlite3.connect(db_path) as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
-        
             cursor.execute('''
                 INSERT INTO conversations (role, content, timestamp, session_id)
                 VALUES (?, ?, ?, ?)
             ''', (role, content, datetime.now().isoformat(), session_id))
-        
-            # Keep only last 1000 messages per session for performance
             cursor.execute('''
                 DELETE FROM conversations 
                 WHERE id NOT IN (
@@ -152,7 +115,6 @@ def append_to_conversation_db(role: str, content: str, session_id: str):
                     LIMIT 1000
                 )
             ''', (session_id,))
-        
             conn.commit()
         logger.debug(f"📝 Saved message to DB: {role} - {content[:50]}...")
     except Exception as e:
@@ -161,10 +123,8 @@ def append_to_conversation_db(role: str, content: str, session_id: str):
 def load_recent_conversation_db(session_id: str, limit: int = 50) -> List[Dict]:
     """Load recent conversation from database"""
     try:
-        db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-        with sqlite3.connect(db_path) as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
-        
             cursor.execute('''
                 SELECT role, content, timestamp 
                 FROM conversations 
@@ -172,14 +132,31 @@ def load_recent_conversation_db(session_id: str, limit: int = 50) -> List[Dict]:
                 ORDER BY timestamp DESC 
                 LIMIT ?
             ''', (session_id, limit))
-        
             messages = cursor.fetchall()
-        
-        # Return in chronological order
         return [{"role": msg[0], "content": msg[1], "timestamp": msg[2]} for msg in reversed(messages)]
     except Exception as e:
         logger.error(f"Database load error: {e}", exc_info=True)
         return []
+
+def get_leads_df() -> pd.DataFrame:
+    """Get leads as pandas DataFrame for export"""
+    try:
+        with get_db_connection() as conn:
+            df = pd.read_sql_query("SELECT name, email, context, timestamp FROM leads", conn)
+        return df
+    except Exception as e:
+        logger.error(f"Lead export error: {e}", exc_info=True)
+        return pd.DataFrame(columns=["name", "email", "context", "timestamp"])
+
+def get_analytics_df() -> pd.DataFrame:
+    """Get analytics as pandas DataFrame for export"""
+    try:
+        with get_db_connection() as conn:
+            df = pd.read_sql_query("SELECT key, value, updated_at FROM analytics", conn)
+        return df
+    except Exception as e:
+        logger.error(f"Analytics export error: {e}", exc_info=True)
+        return pd.DataFrame(columns=["key", "value", "updated_at"])
 
 # -----------------------------
 # Core Functions
@@ -188,11 +165,9 @@ def get_key(name: str) -> Optional[str]:
     """Get API key with detailed logging"""
     env_value = os.getenv(name)
     secret_value = st.secrets.get(name)
-    
     logger.debug(f"🔑 Key lookup - {name}:")
     logger.debug(f"  Environment: {'✅ Found' if env_value else '❌ Not found'}")
     logger.debug(f"  Secrets: {'✅ Found' if secret_value else '❌ Not found'}")
-    
     return secret_value or env_value
 
 def extract_email(text: str) -> Optional[str]:
@@ -212,7 +187,7 @@ def extract_name(text: str) -> str:
     return "Friend"
 
 def format_timestamp(timestamp_str: str) -> str:
-    """More reliable timestamp formatting with better contrast"""
+    """Reliable timestamp formatting"""
     try:
         if isinstance(timestamp_str, str):
             return datetime.fromisoformat(timestamp_str).strftime("%H:%M")
@@ -221,20 +196,16 @@ def format_timestamp(timestamp_str: str) -> str:
     except (ValueError, TypeError):
         return datetime.now().strftime("%H:%M")
 
-@st.cache_data(ttl=1800, show_spinner=False)  # Added TTL for freshness
-def cached_engine_answer(_engine: HybridEngine, question: str) -> str:
-    logger.info(f"🔍 Engine processing question: '{question}'")
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_engine_answer(_engine: HybridEngine, question: str, lang: str) -> str:
+    logger.info(f"🔍 Engine processing question: '{question}' (lang: {lang})")
     start_time = time.time()
-    
     try:
         normalized = question.lower().strip()
         logger.debug(f"📤 Sending to engine: '{normalized}'")
-        
-        response = _engine.answer(normalized)
-        
+        response = _engine.answer(normalized, lang)
         processing_time = time.time() - start_time
         logger.info(f"✅ Engine response received in {processing_time:.2f}s: '{response[:100]}...'")
-        
         return response
     except Exception as e:
         processing_time = time.time() - start_time
@@ -243,10 +214,8 @@ def cached_engine_answer(_engine: HybridEngine, question: str) -> str:
 
 def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captured: bool) -> str:
     logger.debug(f"🎭 Applying teddy filter - First: {is_first}, Lead captured: {lead_captured}")
-    
     friendly_prefix = "Hi there, friend! 🧸 " if is_first else ""
     sales_tail = ""
-    
     if not lead_captured:
         if any(k in user_message.lower() for k in ["gift", "present", "birthday", "anniversary"]):
             sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁"
@@ -254,10 +223,6 @@ def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captur
             sales_tail = " I can also compare sizes to help you get the best value."
         elif any(k in user_message.lower() for k in ["custom", "personalize", "embroidery"]):
             sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote."
-    
-    if any(k in user_message.lower() for k in ["buy", "order", "purchase"]):
-        sales_tail += " 💳 You can place your order anytime at [Cuddleheroes Store](https://cuddleheroes.example.com)."
-    
     return f"{friendly_prefix}{raw_answer}{sales_tail}"
 
 # -----------------------------
@@ -273,13 +238,10 @@ def get_analytics() -> Dict[str, int]:
         "sales_related": 0, "order_tracking": 0, "total_sessions": 0
     }
     try:
-        db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-        with sqlite3.connect(db_path) as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
-        
             cursor.execute('SELECT key, value FROM analytics')
             results = cursor.fetchall()
-        
         db_analytics = {row[0]: row[1] for row in results}
         return {**default, **db_analytics}
     except Exception as e:
@@ -289,20 +251,14 @@ def get_analytics() -> Dict[str, int]:
 def update_analytics_batch(updates: Dict[str, int], immediate: bool = False):
     """Batch update analytics with optional immediate flush"""
     global _analytics_batch
-    
     try:
         with _analytics_lock:
-            # Merge updates into batch
             for key, increment in updates.items():
                 _analytics_batch[key] = _analytics_batch.get(key, 0) + increment
-            
-            # Flush if immediate or batch is large
             if immediate or sum(_analytics_batch.values()) >= 10:
                 if _analytics_batch:
-                    db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-                    with sqlite3.connect(db_path) as conn:
+                    with get_db_connection() as conn:
                         cursor = conn.cursor()
-                        
                         for key, increment in _analytics_batch.items():
                             cursor.execute('''
                                 INSERT INTO analytics (key, value, updated_at) 
@@ -311,26 +267,92 @@ def update_analytics_batch(updates: Dict[str, int], immediate: bool = False):
                                 value = value + excluded.value,
                                 updated_at = excluded.updated_at
                             ''', (key, increment, datetime.now().isoformat()))
-                        
                         conn.commit()
-                    
-                    # Update session state
                     if "analytics" in st.session_state:
                         current = st.session_state.analytics
                         for key, increment in _analytics_batch.items():
                             current[key] = current.get(key, 0) + increment
                         st.session_state.analytics = current
-                    
                     logger.debug(f"📊 Analytics updated: {_analytics_batch}")
                     _analytics_batch = {}
-                    
     except Exception as e:
         logger.error(f"Analytics update error: {e}", exc_info=True)
+
+# -----------------------------
+# Admin Dashboard
+# -----------------------------
+def render_admin_dashboard():
+    """Render admin dashboard with leads and analytics export"""
+    st.header("🧸 TedPro Admin Dashboard")
+    st.markdown("Manage leads and analytics for CuddleHeros")
+    
+    # Leads section
+    st.subheader("Leads")
+    leads_df = get_leads_df()
+    if not leads_df.empty:
+        st.dataframe(leads_df, use_container_width=True)
+        csv = leads_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Leads CSV",
+            data=csv,
+            file_name=f"cuddleheroes_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No leads captured yet.")
+    
+    # Analytics section
+    st.subheader("Analytics")
+    analytics_df = get_analytics_df()
+    if not analytics_df.empty:
+        st.dataframe(analytics_df, use_container_width=True)
+        csv = analytics_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Analytics CSV",
+            data=csv,
+            file_name=f"cuddleheroes_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No analytics data yet.")
+
+# -----------------------------
+# Debug Panel
+# -----------------------------
+def show_debug_panel():
+    """Show debug information in sidebar"""
+    with st.sidebar.expander("🔧 Debug Panel", expanded=False):
+        st.write("**API Status:**")
+        api_key = get_key("OPENROUTER_API_KEY")
+        if api_key:
+            masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+            st.success(f"✅ API Key: {masked_key}")
+        else:
+            st.error("❌ API Key: MISSING")
+        if 'engine' in st.session_state:
+            st.success("✅ Engine: Initialized")
+        else:
+            st.error("❌ Engine: Not initialized")
+        try:
+            db_path = Path("/tmp") / f"{client_id}_chat_data.db"
+            if db_path.exists():
+                st.success("✅ Database: Connected")
+            else:
+                st.warning("⚠️ Database: Not created yet")
+        except:
+            st.error("❌ Database: Error")
+        st.write("**Session Info:**")
+        st.write(f"Session ID: {st.session_state.get('session_id', 'None')}")
+        st.write(f"Messages: {len(st.session_state.get('chat_history', []))}")
+        if st.button("🔄 Clear Cache"):
+            st.cache_data.clear()
+            st.rerun()
 
 # -----------------------------
 # Engine Initialization
 # -----------------------------
 logger.info("🚀 Starting TedPro initialization...")
+client_id = "tedpro_client"
 
 api_key = get_key("OPENROUTER_API_KEY")
 if not api_key:
@@ -348,11 +370,6 @@ if not api_key:
     """)
     st.stop()
 
-logger.info("✅ API key found, initializing engine...")
-
-client_id = "tedpro_client"
-
-# Initialize database
 try:
     init_database()
     logger.info("✅ Database initialized")
@@ -361,19 +378,13 @@ except Exception as e:
     st.error(f"Database error: {e}")
     st.stop()
 
-# Initialize engine
 try:
     logger.info("🔄 Initializing HybridEngine...")
     start_time = time.time()
-    
     engine = HybridEngine(api_key=api_key, client_id=client_id)
-    
     init_time = time.time() - start_time
     logger.info(f"✅ HybridEngine initialized successfully in {init_time:.2f}s")
-    
-    # Store engine in session state for persistence
     st.session_state.engine = engine
-    
 except Exception as e:
     logger.error(f"❌ Engine initialization failed: {str(e)}", exc_info=True)
     st.error(f"""
@@ -388,8 +399,17 @@ except Exception as e:
     """)
     st.stop()
 
-# Show debug panel
-show_debug_panel()
+# -----------------------------
+# Multi-Page Setup
+# -----------------------------
+pages = {
+    "Chat": lambda: None,  # Main chat page (defined below)
+    "Admin Dashboard": render_admin_dashboard
+}
+page = st.sidebar.selectbox("Select Page", list(pages.keys()), key="page_selector")
+if page != "Chat":
+    pages[page]()
+    st.stop()
 
 # -----------------------------
 # UI Styling - Enhanced Performance
@@ -546,6 +566,21 @@ body {
     50% { border-color: #FF922B; }
     100% { border-color: #FFA94D; }
 }
+.checkout-btn {
+    background: linear-gradient(135deg, #FF922B, #FFA94D);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-size: 14px;
+    margin-top: 10px;
+}
+.checkout-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(255, 165, 0, 0.2);
+}
 .debug-panel {
     background: #f8f9fa;
     border: 1px solid #dee2e6;
@@ -555,7 +590,6 @@ body {
     font-family: monospace;
     font-size: 12px;
 }
-/* Mobile optimizations */
 @media (max-width: 768px) {
     .quick-questions-grid {
         grid-template-columns: 1fr;
@@ -604,7 +638,6 @@ if "session_id" not in st.session_state:
     update_analytics_batch({"total_sessions": 1}, immediate=True)
     logger.info(f"🆕 New session started: {st.session_state.session_id}")
 
-# Initialize session state
 default_states = {
     "chat_history": [],
     "show_history": False,
@@ -617,13 +650,13 @@ default_states = {
     "last_processed_time": 0,
     "user_message_count": 0,
     "last_lead_banner_shown": 0,
-    "last_error": None
+    "last_error": None,
+    "language": "en"
 }
 
 for key, default_value in default_states.items():
     if key not in st.session_state:
         if key == "chat_history":
-            # Load recent messages from database
             recent_messages = load_recent_conversation_db(st.session_state.session_id, 50)
             st.session_state.chat_history = []
             for msg in recent_messages:
@@ -637,36 +670,19 @@ for key, default_value in default_states.items():
 logger.debug(f"🔄 Session state initialized: {len(st.session_state.chat_history)} messages in history")
 
 # -----------------------------
-# Chat Display Function
-# -----------------------------
-def display_chat():
-    """Display chat messages"""
-    st.markdown('<div class="conversation-scroll">', unsafe_allow_html=True)
-    
-    # Display last 20 messages for performance
-    display_messages = st.session_state.chat_history[-20:]
-    
-    for msg in display_messages:
-        if "user" in msg:
-            st.markdown(
-                f"<div class='user-msg'><b>You:</b> {msg['user']}"
-                f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
-                unsafe_allow_html=True
-            )
-        elif "bot" in msg:
-            st.markdown(
-                f"<div class='bot-msg'><b>TedPro:</b> {msg['bot']}"
-                f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
-                unsafe_allow_html=True
-            )
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# -----------------------------
 # Sidebar
 # -----------------------------
 st.sidebar.markdown("### 🧸 TedPro Assistant")
 st.sidebar.markdown("Your friendly plushie expert!")
+
+# Language selector
+st.session_state.language = st.sidebar.selectbox(
+    "Language / Idioma",
+    ["English", "Español"],
+    index=0 if st.session_state.language == "en" else 1,
+    key="language_selector"
+)
+st.session_state.language = "en" if st.session_state.language == "English" else "es"
 
 # Analytics
 st.sidebar.markdown("### 📊 Live Analytics")
@@ -684,13 +700,12 @@ with st.sidebar.expander("📈 Detailed Metrics"):
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 💌 Get Our Plush Catalog")
-name = st.sidebar.text_input("Your Name", key="sidebar_name")
-email = st.sidebar.text_input("Your Email", key="sidebar_email")
+name = st.sidebar.text_input("Your Name / Nombre", key="sidebar_name")
+email = st.sidebar.text_input("Your Email / Correo", key="sidebar_email")
 
 subscribe_disabled = st.session_state.lead_captured
-
 if st.sidebar.button(
-    "✅ Already Subscribed!" if subscribe_disabled else "Subscribe & Get Catalog 🎁",
+    "✅ Already Subscribed! / ¡Ya suscrito!" if subscribe_disabled else "Subscribe & Get Catalog / Suscríbete 🎁",
     disabled=subscribe_disabled,
     key="sidebar_subscribe"
 ):
@@ -705,18 +720,20 @@ if st.sidebar.button(
                     st.session_state.lead_captured = True
                     st.session_state.sidebar_name = ""
                     st.session_state.sidebar_email = ""
-                    st.sidebar.success("🎉 You're subscribed! We'll send the catalog soon.")
+                    st.sidebar.success("🎉 You're subscribed! We'll send the catalog soon. / ¡Suscrito! Enviaremos el catálogo pronto.")
                     logger.info(f"📧 Lead captured: {name} <{extracted_email}>")
                     st.rerun()
                 else:
-                    st.sidebar.info("📧 You're already subscribed with this email!")
+                    st.sidebar.info("📧 You're already subscribed with this email! / ¡Ya estás suscrito con este correo!")
             except Exception as e:
                 logger.error(f"Lead capture error: {e}", exc_info=True)
                 st.sidebar.error(f"Failed to save subscription: {e}")
         else:
-            st.sidebar.warning("Please enter a valid email address.")
+            st.sidebar.warning("Please enter a valid email address. / Ingresa un correo válido.")
     else:
-        st.sidebar.warning("Please enter both name and email.")
+        st.sidebar.warning("Please enter both name and email. / Ingresa nombre y correo.")
+
+show_debug_panel()
 
 # -----------------------------
 # Main Chat Interface
@@ -725,10 +742,10 @@ col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
 with col1:
     st.markdown('<h1 style="color:#FF922B;">TedPro Marketing Assistant 🧸</h1>', unsafe_allow_html=True)
 with col2:
-    if st.button("📜 History", key="header_history_toggle"):
+    if st.button("📜 History / Historial", key="header_history_toggle"):
         st.session_state.show_history = not st.session_state.show_history
 with col3:
-    toggle_label = "❌ Hide" if st.session_state.show_quick_questions else "💡 Quick Q's"
+    toggle_label = "❌ Hide / Ocultar" if st.session_state.show_quick_questions else "💡 Quick Q's / Preguntas rápidas"
     if st.button(toggle_label, key="quick_questions_toggle"):
         st.session_state.show_quick_questions = not st.session_state.show_quick_questions
 with col4:
@@ -737,7 +754,7 @@ with col4:
         unsafe_allow_html=True
     )
 
-st.markdown('<p style="color:#5A3A1B;">Here to help with products, shipping, or special offers!</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#5A3A1B;">Here to help with products, shipping, or special offers! / ¡Aquí para ayudar con productos, envíos u ofertas!</p>', unsafe_allow_html=True)
 
 # -----------------------------
 # Quick Questions
@@ -748,29 +765,33 @@ should_show_quick_questions = (
 )
 
 if should_show_quick_questions and not st.session_state.processing_active:
-    st.markdown("### 💡 Quick Questions")
-    
-    quick_questions = [
-        "What's your pricing?", "Do you ship internationally?", 
-        "Can I customize plushies?", "What's your return policy?", 
-        "How long does shipping take?", "Do you have gift options?", 
-        "What materials are used?", "Can I track my order?",
-        "Do you offer discounts?", "What sizes are available?"
-    ]
-    
+    st.markdown("### 💡 Quick Questions / Preguntas rápidas")
+    quick_questions = {
+        "en": [
+            "What's your pricing?", "Do you ship internationally?", 
+            "Can I customize plushies?", "What's your return policy?", 
+            "How long does shipping take?", "Do you have gift options?", 
+            "What materials are used?", "Can I track my order?",
+            "Do you offer discounts?", "What sizes are available?"
+        ],
+        "es": [
+            "¿Cuál es el precio?", "¿Hacen envíos internacionales?", 
+            "¿Puedo personalizar peluches?", "¿Cuál es la política de devoluciones?", 
+            "¿Cuánto tarda el envío?", "¿Tienen opciones de regalo?", 
+            "¿Qué materiales usan?", "¿Puedo rastrear mi pedido?",
+            "¿Ofrecen descuentos?", "¿Qué tallas están disponibles?"
+        ]
+    }
     with st.form("quick_questions_form"):
         st.markdown('<div class="quick-questions-form">', unsafe_allow_html=True)
-        
         selected_question = st.radio(
-            "Choose a question:",
-            quick_questions,
+            "Choose a question: / Elige una pregunta:",
+            quick_questions[st.session_state.language],
             key="quick_questions_radio",
             label_visibility="collapsed"
         )
-        
-        submitted = st.form_submit_button("Ask this question")
+        submitted = st.form_submit_button("Ask this question / Hacer esta pregunta")
         st.markdown('</div>', unsafe_allow_html=True)
-        
         if submitted and selected_question:
             st.session_state.selected_quick_question = selected_question
             logger.info(f"🎯 Quick question selected: {selected_question}")
@@ -779,56 +800,74 @@ if should_show_quick_questions and not st.session_state.processing_active:
 # Lead Banner
 # -----------------------------
 def should_show_lead_banner() -> bool:
-    """Determine if lead banner should be shown based on message count"""
+    """Determine if lead banner should be shown"""
     if st.session_state.lead_captured:
         return False
-    
     user_message_count = st.session_state.user_message_count
     last_shown = st.session_state.last_lead_banner_shown
-    
-    # Show on first message, then every 3 messages until captured
     return (user_message_count == 0 or 
             (user_message_count >= 3 and user_message_count - last_shown >= 3))
 
 if should_show_lead_banner():
-    st.markdown("""
-    <div class='lead-banner'>
-    <h4 style='color:#E65C00;margin:0'>🎁 Special Offer for New Friends!</h4>
-    <p style='margin:8px 0;font-size:15px;color:#5A3A1B;'>Get our <b>free plushie catalog</b> + <b>10% discount</b> on your first order!</p>
-    <p style='margin:0;font-style:italic;color:#8B5A2B'>Just ask about our products or drop your email in the sidebar →</p>
-    </div>
-    """, unsafe_allow_html=True)
+    banner_text = {
+        "en": """
+        <div class='lead-banner'>
+        <h4 style='color:#E65C00;margin:0'>🎁 Special Offer for New Friends!</h4>
+        <p style='margin:8px 0;font-size:15px;color:#5A3A1B;'>Get our <b>free plushie catalog</b> + <b>10% discount</b> on your first order!</p>
+        <p style='margin:0;font-style:italic;color:#8B5A2B'>Just ask about our products or drop your email in the sidebar →</p>
+        </div>
+        """,
+        "es": """
+        <div class='lead-banner'>
+        <h4 style='color:#E65C00;margin:0'>🎁 ¡Oferta especial para nuevos amigos!</h4>
+        <p style='margin:8px 0;font-size:15px;color:#5A3A1B;'>Obtén nuestro <b>catálogo de peluches gratis</b> + <b>10% de descuento</b> en tu primera compra!</p>
+        <p style='margin:0;font-style:italic;color:#8B5A2B'>Solo pregunta sobre nuestros productos o deja tu correo en la barra lateral →</p>
+        </div>
+        """
+    }
+    st.markdown(banner_text[st.session_state.language], unsafe_allow_html=True)
     st.session_state.last_lead_banner_shown = st.session_state.user_message_count
+
+# -----------------------------
+# Chat Display Function
+# -----------------------------
+def display_chat():
+    """Display chat messages"""
+    st.markdown('<div class="conversation-scroll">', unsafe_allow_html=True)
+    display_messages = st.session_state.chat_history[-20:]
+    for msg in display_messages:
+        if "user" in msg:
+            st.markdown(
+                f"<div class='user-msg'><b>You / Tú:</b> {msg['user']}"
+                f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
+                unsafe_allow_html=True
+            )
+        elif "bot" in msg:
+            st.markdown(
+                f"<div class='bot-msg'><b>TedPro:</b> {msg['bot']}"
+                f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
+                unsafe_allow_html=True
+            )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # -----------------------------
 # Message Processing
 # -----------------------------
 def process_message(user_input: str):
     """Optimized message processing with streaming and enhanced features"""
-    # Rate limiting
     current_time = time.time()
     if current_time - st.session_state.last_processed_time < 0.5:
         return
-    
     st.session_state.last_processed_time = current_time
-    
     logger.info(f"🔄 Processing message: '{user_input}'")
-    
     try:
-        # Track user message count for lead banner logic
         st.session_state.user_message_count += 1
-        
-        # Analytics updates
         analytics_updates = {"total_messages": 1}
-        
         user_input_lower = user_input.lower()
         if any(k in user_input_lower for k in ["price", "buy", "order", "cost", "purchase"]):
             analytics_updates["sales_related"] = 1
-        
         if any(k in user_input_lower for k in ["track", "shipping", "delivery"]) and any(c.isdigit() for c in user_input):
             analytics_updates["order_tracking"] = 1
-        
-        # Enhanced lead capture with name extraction
         extracted_email = None
         extracted_name = "Friend"
         if not st.session_state.lead_captured:
@@ -844,19 +883,14 @@ def process_message(user_input: str):
                 except Exception as e:
                     logger.error(f"Lead capture error: {e}", exc_info=True)
                     st.session_state.last_error = str(e)
-        
-        # Process the main response with streaming
         start_time = time.time()
-        
         try:
             user_messages_before = len([m for m in st.session_state.chat_history if "user" in m])
             is_first = user_messages_before == 1
-            
-            # Stream the raw response
             bot_placeholder = st.empty()
             bot_placeholder.markdown("""
             <div class="typing-indicator">
-                Teddy is typing
+                Teddy is typing / Teddy está escribiendo
                 <div class="typing-dots">
                     <div class="typing-dot"></div>
                     <div class="typing-dot"></div>
@@ -864,55 +898,54 @@ def process_message(user_input: str):
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            
             raw_response = ""
             first_chunk = True
-            friendly_prefix = "Hi there, friend! 🧸 " if is_first else ""
-            
-            for chunk in engine.stream_answer(user_input):
+            friendly_prefix = "Hi there, friend! 🧸 " if is_first and st.session_state.language == "en" else "¡Hola, amigo! 🧸 " if is_first else ""
+            for chunk in engine.stream_answer(user_input, st.session_state.language):
                 if first_chunk:
                     raw_response += friendly_prefix + chunk
                     first_chunk = False
                 else:
                     raw_response += chunk
-                # Update placeholder with growing response
                 bot_placeholder.markdown(
                     f"<div class='bot-msg'><b>TedPro:</b> {raw_response}"
                     f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                     unsafe_allow_html=True
                 )
-            
-            # Apply sales tail after full response
             sales_tail = ""
             if not st.session_state.lead_captured:
                 if any(k in user_input_lower for k in ["gift", "present", "birthday", "anniversary"]):
-                    sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁"
+                    sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁" if st.session_state.language == "en" else " Si es un regalo, puedo sugerir tallas o añadir una nota dulce. 🎁"
                 elif any(k in user_input_lower for k in ["price", "how much", "cost", "buy"]):
-                    sales_tail = " I can also compare sizes to help you get the best value."
+                    sales_tail = " I can also compare sizes to help you get the best value." if st.session_state.language == "en" else " También puedo comparar tallas para obtener el mejor valor."
                 elif any(k in user_input_lower for k in ["custom", "personalize", "embroidery"]):
-                    sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote."
-            
-            if any(k in user_input_lower for k in ["buy", "order", "purchase"]):
-                sales_tail += " 💳 You can place your order anytime at [Cuddleheroes Store](https://cuddleheroes.example.com)."
-            
+                    sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote." if st.session_state.language == "en" else " Dime tu idea, verificaré la viabilidad, el tiempo y una cotización justa."
+            is_purchase_intent = any(k in user_input_lower for k in ["buy", "order", "purchase"])
             filtered_response = raw_response + sales_tail
-            
-            # Final update with filtered response
+            if is_purchase_intent:
+                filtered_response += f" 💳 {'You can place your order anytime at' if st.session_state.language == 'en' else 'Puedes realizar tu pedido en cualquier momento en'} [Cuddleheroes Store](https://cuddleheroes.example.com)."
             bot_placeholder.markdown(
                 f"<div class='bot-msg'><b>TedPro:</b> {filtered_response}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                 unsafe_allow_html=True
             )
-            
-            # Add main bot response to history and DB
+            if is_purchase_intent:
+                if st.button(
+                    "Checkout Now / Pagar ahora" if st.session_state.language == "en" else "Pagar ahora",
+                    key=f"checkout_{uuid.uuid4()}",
+                    help="Proceed to mock checkout / Proceder al pago simulado"
+                ):
+                    st.markdown(
+                        f"<div class='bot-msg'><b>TedPro:</b> {'Redirecting to secure checkout... (Mock Stripe flow)' if st.session_state.language == 'en' else 'Redirigiendo al pago seguro... (Flujo simulado de Stripe)'}</div>",
+                        unsafe_allow_html=True
+                    )
+                    logger.info("💳 Mock checkout initiated")
             bot_message_data = {"bot": filtered_response, "timestamp": datetime.now().isoformat()}
             st.session_state.chat_history.append(bot_message_data)
             append_to_conversation_db("assistant", filtered_response, st.session_state.session_id)
-            
-            # Add personalized lead capture acknowledgment
             if extracted_email and extracted_email in st.session_state.captured_emails:
                 lead_placeholder = st.empty()
-                lead_message = f"📧 Thanks, {extracted_name}! I've added {extracted_email} to our updates list!"
+                lead_message = f"📧 Thanks, {extracted_name}! I've added {extracted_email} to our updates list!" if st.session_state.language == "en" else f"📧 ¡Gracias, {extracted_name}! He añadido {extracted_email} a nuestra lista de actualizaciones!"
                 lead_placeholder.markdown(
                     f"<div class='bot-msg'><b>TedPro:</b> {lead_message}"
                     f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
@@ -921,50 +954,53 @@ def process_message(user_input: str):
                 lead_message_data = {"bot": lead_message, "timestamp": datetime.now().isoformat()}
                 st.session_state.chat_history.append(lead_message_data)
                 append_to_conversation_db("assistant", lead_message, st.session_state.session_id)
-            
             processing_time = time.time() - start_time
             logger.info(f"✅ Message processed successfully in {processing_time:.2f}s")
-                
         except Exception as e:
             processing_time = time.time() - start_time
             logger.error(f"❌ Message processing error after {processing_time:.2f}s: {str(e)}", exc_info=True)
             st.session_state.last_error = str(e)
-            error_message = f"I'm having a little trouble right now. Please try again soon! 🧸 (Error: {str(e)})"
+            error_message = f"I'm having a little trouble right now. Please try again soon! 🧸 (Error: {str(e)})" if st.session_state.language == "en" else f"¡Estoy teniendo un pequeño problema ahora! Por favor intenta de nuevo pronto. 🧸 (Error: {str(e)})"
             bot_placeholder.markdown(
                 f"<div class='bot-msg'><b>TedPro:</b> {error_message}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                 unsafe_allow_html=True
             )
-            error_message_data = {
-                "bot": error_message, 
-                "timestamp": datetime.now().isoformat()
-            }
+            error_message_data = {"bot": error_message, "timestamp": datetime.now().isoformat()}
             st.session_state.chat_history.append(error_message_data)
             append_to_conversation_db("assistant", error_message_data["bot"], st.session_state.session_id)
-        
-        # Update analytics
         update_analytics_batch(analytics_updates)
-        
     finally:
         st.session_state.processing_active = False
         logger.debug("🔄 Message processing completed")
-        st.rerun()  # Final rerun to ensure clean display without typing
+        st.rerun()
 
 # Main chat rendering
 if st.session_state.show_history:
-    st.subheader("📜 Conversation History")
+    st.subheader("📜 Conversation History / Historial")
     if st.session_state.chat_history:
         display_chat()
     else:
-        st.info("No chat history yet!")
+        st.info("No chat history yet! / ¡Aún no hay historial!")
 else:
     if st.session_state.chat_history:
         display_chat()
     elif not st.session_state.show_quick_questions:
-        st.info("💬 Start a conversation or click '💡 Quick Q's' for common questions!")
+        st.info("💬 Start a conversation or click 'Quick Q's' for common questions! / ¡Inicia una conversación o haz clic en 'Preguntas rápidas'!")
 
 # Process quick question or user input
-user_input = st.chat_input("Ask me about plushies, pricing, shipping, or anything else! 🧸", disabled=st.session_state.processing_active)
+user_input = st.chat_input(
+    "Ask me about plushies, pricing, shipping, or anything else! 🧸 / ¡Pregúntame sobre peluches, precios, envíos o cualquier cosa! 🧸",
+    disabled=st.session_state.processing_active
+)
+
+# Voice input
+voice_input = st.audio_input("Or speak your question! / ¡O habla tu pregunta!", key="voice_input")
+if voice_input and not st.session_state.processing_active:
+    transcribed_text = engine.transcribe_audio(voice_input)
+    if transcribed_text:
+        user_input = transcribed_text
+        logger.info(f"🎙️ Voice input transcribed: {transcribed_text}")
 
 if st.session_state.selected_quick_question and not st.session_state.processing_active:
     logger.info(f"🎯 Processing quick question: {st.session_state.selected_quick_question}")
@@ -976,9 +1012,8 @@ if user_input and not st.session_state.processing_active:
     st.session_state.processing_active = True
     append_to_conversation_db("user", user_input, st.session_state.session_id)
     st.session_state.chat_history.append({"user": user_input, "timestamp": datetime.now().isoformat()})
-    st.rerun()  # Rerun to show user message and start processing
+    st.rerun()
 
-# If last message is user and processing active, process the response
 if (
     st.session_state.chat_history
     and "user" in st.session_state.chat_history[-1]
@@ -998,7 +1033,7 @@ st.markdown("""
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by Tash & Hendrik 🧸</small>
 <br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Complete Version</small>
+<small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - Complete Version</small>
 </center>
 """, unsafe_allow_html=True)
 
