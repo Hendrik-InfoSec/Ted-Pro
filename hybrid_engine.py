@@ -127,7 +127,8 @@ Keep responses concise but helpful. If you don't know specific details, suggest 
             self.logger.info(f"🔑 Using API key: {self.api_key[:10]}...")
             self.logger.info(f"📤 Sending request to: {url}")
             
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            # 🚨 CRITICAL FIX: Reduce timeout to 20 seconds (less than the 25s thread timeout)
+            response = requests.post(url, headers=headers, json=data, timeout=20)
             self.logger.info(f"📥 Response status: {response.status_code}")
             
             if response.status_code == 200:
@@ -140,7 +141,7 @@ Keep responses concise but helpful. If you don't know specific details, suggest 
                 return f"I'm having trouble connecting right now. Please try again! (API Error: {response.status_code})"
                 
         except requests.exceptions.Timeout:
-            self.logger.error("⏰ API request timed out")
+            self.logger.error("⏰ API request timed out after 20 seconds")
             return "I'm taking a bit longer than usual to respond. Please try again! 🧸"
         except requests.exceptions.ConnectionError:
             self.logger.error("🔌 API connection error")
