@@ -68,6 +68,11 @@ class HybridEngine:
         """Search local FAQ and knowledge base"""
         question_lower = question.lower()
         
+        # Simple greetings - respond immediately without API call
+        greetings = ["hi", "hello", "hey", "hola", "greetings", "howdy"]
+        if question_lower.strip() in greetings:
+            return "Hello there! 🧸 I'm TedPro, your friendly plushie assistant! How can I help you today? Whether you have questions about our products, shipping, or custom orders, I'm here to help!"
+        
         # Check FAQs
         for faq in self.knowledge_base.get("faqs", []):
             if any(keyword in question_lower for keyword in faq.get("keywords", [])):
@@ -89,46 +94,30 @@ class HybridEngine:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://ted-pro.streamlit.app",  # Required by OpenRouter
-                "X-Title": "TedPro Assistant"  # Required by OpenRouter
+                "HTTP-Referer": "https://ted-pro.streamlit.app",
+                "X-Title": "TedPro Assistant"
             }
             
             data = {
-                "model": "openai/gpt-3.5-turbo",  # You can change this to other models
+                "model": "openai/gpt-3.5-turbo",
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are TedPro, a friendly plushie marketing assistant for a company called CuddleHeroes. 
-
-About CuddleHeroes:
-- We sell high-quality plushies and stuffed animals
-- We offer customization options (embroidery, colors, sizes)
-- We ship internationally
-- We have a 30-day return policy
-- We offer gift wrapping and personalized notes
-
-Your personality:
-- Warm, friendly, and enthusiastic about plushies 🧸
-- Helpful and informative about products
-- Gently promotional when appropriate
-- Use emojis occasionally to be engaging
-
-Keep responses concise but helpful. If you don't know specific details, suggest checking the website or contacting support."""
+                        "content": """You are TedPro, a friendly plushie marketing assistant. Be warm, helpful, and concise. Use emojis occasionally. Keep responses under 3 sentences unless more detail is needed."""
                     },
                     {
                         "role": "user", 
                         "content": question
                     }
                 ],
-                "max_tokens": 500,
+                "max_tokens": 150,
                 "temperature": 0.7
             }
             
             self.logger.info(f"🔑 Using API key: {self.api_key[:10]}...")
-            self.logger.info(f"📤 Sending request to: {url}")
             
-            # 🚨 CRITICAL FIX: Reduce timeout to 20 seconds (less than the 25s thread timeout)
-            response = requests.post(url, headers=headers, json=data, timeout=20)
+            # CRITICAL FIX: Reduced timeout to 15 seconds
+            response = requests.post(url, headers=headers, json=data, timeout=15)
             self.logger.info(f"📥 Response status: {response.status_code}")
             
             if response.status_code == 200:
@@ -138,17 +127,17 @@ Keep responses concise but helpful. If you don't know specific details, suggest 
                 return answer
             else:
                 self.logger.error(f"❌ API error {response.status_code}: {response.text}")
-                return f"I'm having trouble connecting right now. Please try again! (API Error: {response.status_code})"
+                return "I'm having trouble connecting right now. Please try again! 🧸"
                 
         except requests.exceptions.Timeout:
-            self.logger.error("⏰ API request timed out after 20 seconds")
+            self.logger.error("⏰ API request timed out after 15 seconds")
             return "I'm taking a bit longer than usual to respond. Please try again! 🧸"
         except requests.exceptions.ConnectionError:
             self.logger.error("🔌 API connection error")
             return "I'm having trouble connecting to my knowledge base. Please check your internet connection! 🧸"
         except Exception as e:
             self.logger.error(f"❌ Unexpected API error: {str(e)}")
-            return f"I encountered an unexpected error: {str(e)}. Please try again! 🧸"
+            return "I encountered an unexpected error. Please try again! 🧸"
     
     def get_fallback_answer(self, question: str) -> str:
         """Fallback answer when API fails"""
@@ -156,7 +145,6 @@ Keep responses concise but helpful. If you don't know specific details, suggest 
             "I'd love to help with that! Let me check my resources and get back to you with the best information. 🧸",
             "That's a great question! I'm here to help with all things plushies. Let me find the perfect answer for you. 🎁",
             "Thanks for your question! I specialize in plushie products and would be happy to assist you. 💫",
-            "I'm currently experiencing some technical difficulties. Please try again in a moment! 🧸"
         ]
         return random.choice(fallback_responses)
     
@@ -180,9 +168,3 @@ Keep responses concise but helpful. If you don't know specific details, suggest 
         except Exception as e:
             self.logger.error(f"Lead capture error: {e}")
             raise
-
-    def learn_from_interaction(self, question: str, answer: str, feedback: Optional[str] = None):
-        """Learn from user interactions to improve responses"""
-        # This would be your learning logic
-        # For now, just log the interaction
-        self.logger.debug(f"Learning from interaction - Q: {question}, A: {answer}, Feedback: {feedback}")
