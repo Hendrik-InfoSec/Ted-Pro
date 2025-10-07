@@ -10,11 +10,10 @@ import uuid
 import random
 import threading
 import logging
-from typing import List, Set
+from typing import List, Set, Dict
 import sqlite3
 import hashlib
 import traceback
-import concurrent.futures
 
 # -----------------------------
 # Setup & Configuration - Streamlit Cloud Compatible
@@ -32,31 +31,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]  # Only StreamHandler for cloud compatibility
 )
 logger = logging.getLogger("TedPro")
-
-# -----------------------------
-# Safe Engine Wrapper with Timeout
-# -----------------------------
-def safe_engine_answer(engine, question):
-    """Wrapper with timeout protection around engine calls"""
-    logger.info(f"🚀 Engine answering: '{question}'")
-    start_time = time.time()
-    
-    try:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(engine.answer, question)
-            result = future.result(timeout=25)
-            elapsed = time.time() - start_time
-            logger.info(f"✅ Engine answered in {elapsed:.2f}s: '{result[:80]}...'")
-            return result
-    except concurrent.futures.TimeoutError:
-        elapsed = time.time() - start_time
-        logger.error(f"❌ Engine timeout after {elapsed:.2f}s for: '{question}'")
-        return "Teddy got a bit sleepy waiting for a reply! 🧸 Please try again in a moment."
-    except Exception as e:
-        elapsed = time.time() - start_time
-        logger.error(f"❌ Engine error after {elapsed:.2f}s: {e}")
-        logger.error(traceback.format_exc())
-        return f"I'm having trouble right now. Please try again! 🧸 (Error: {str(e)})"
 
 # -----------------------------
 # Debug Panel
@@ -77,12 +51,6 @@ def show_debug_panel():
         # Engine status
         if 'engine' in st.session_state:
             st.success("✅ Engine: Initialized")
-            # Debug engine test
-            try:
-                test_response = st.session_state.engine.answer("test")
-                st.success(f"✅ Engine test: Working - '{test_response[:50]}...'")
-            except Exception as e:
-                st.error(f"❌ Engine test failed: {e}")
         else:
             st.error("❌ Engine: Not initialized")
         
@@ -116,93 +84,91 @@ def init_database():
     db_path = Path("/tmp") / f"{client_id}_chat_data.db"
     
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
         
-        # Conversations table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                session_id TEXT NOT NULL
-            )
-        ''')
+            # Conversations table with index for faster queries
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    session_id TEXT NOT NULL
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_session_timestamp ON conversations (session_id, timestamp)')
         
-        # Analytics table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS analytics (
-                key TEXT PRIMARY KEY,
-                value INTEGER DEFAULT 0,
-                updated_at TEXT NOT NULL
-            )
-        ''')
+            # Analytics table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS analytics (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                )
+            ''')
         
-        # Leads table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS leads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                context TEXT NOT NULL,
-                timestamp TEXT NOT NULL
-            )
-        ''')
+            # Leads table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS leads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    context TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+            ''')
         
-        conn.commit()
-        conn.close()
+            conn.commit()
         logger.info("✅ Database initialized successfully")
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
         raise
 
-def append_to_conversation_db(role, content, session_id):
+def append_to_conversation_db(role: str, content: str, session_id: str):
     """Append message to database"""
     try:
         db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
         
-        cursor.execute('''
-            INSERT INTO conversations (role, content, timestamp, session_id)
-            VALUES (?, ?, ?, ?)
-        ''', (role, content, datetime.now().isoformat(), session_id))
+            cursor.execute('''
+                INSERT INTO conversations (role, content, timestamp, session_id)
+                VALUES (?, ?, ?, ?)
+            ''', (role, content, datetime.now().isoformat(), session_id))
         
-        # Keep only last 1000 messages per session for performance
-        cursor.execute('''
-            DELETE FROM conversations 
-            WHERE id NOT IN (
-                SELECT id FROM conversations 
-                WHERE session_id = ? 
-                ORDER BY timestamp DESC 
-                LIMIT 1000
-            )
-        ''', (session_id,))
+            # Keep only last 1000 messages per session for performance
+            cursor.execute('''
+                DELETE FROM conversations 
+                WHERE id NOT IN (
+                    SELECT id FROM conversations 
+                    WHERE session_id = ? 
+                    ORDER BY timestamp DESC 
+                    LIMIT 1000
+                )
+            ''', (session_id,))
         
-        conn.commit()
-        conn.close()
+            conn.commit()
         logger.debug(f"📝 Saved message to DB: {role} - {content[:50]}...")
     except Exception as e:
         logger.error(f"Database error: {e}")
 
-def load_recent_conversation_db(session_id, limit=50):
+def load_recent_conversation_db(session_id: str, limit: int = 50) -> List[Dict]:
     """Load recent conversation from database"""
     try:
         db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
         
-        cursor.execute('''
-            SELECT role, content, timestamp 
-            FROM conversations 
-            WHERE session_id = ? 
-            ORDER BY timestamp DESC 
-            LIMIT ?
-        ''', (session_id, limit))
+            cursor.execute('''
+                SELECT role, content, timestamp 
+                FROM conversations 
+                WHERE session_id = ? 
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            ''', (session_id, limit))
         
-        messages = cursor.fetchall()
-        conn.close()
+            messages = cursor.fetchall()
         
         # Return in chronological order
         return [{"role": msg[0], "content": msg[1], "timestamp": msg[2]} for msg in reversed(messages)]
@@ -213,7 +179,7 @@ def load_recent_conversation_db(session_id, limit=50):
 # -----------------------------
 # Core Functions
 # -----------------------------
-def get_key(name: str):
+def get_key(name: str) -> Optional[str]:
     """Get API key with detailed logging"""
     env_value = os.getenv(name)
     secret_value = st.secrets.get(name)
@@ -224,13 +190,13 @@ def get_key(name: str):
     
     return secret_value or env_value
 
-def extract_email(text: str):
+def extract_email(text: str) -> Optional[str]:
     """Robust email validation using fullmatch"""
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     match = re.fullmatch(email_pattern, text.strip())
     return match.group(0) if match else None
 
-def extract_name(text: str):
+def extract_name(text: str) -> str:
     """Simple name extraction - look for capitalized words that aren't email"""
     words = text.split()
     for word in words:
@@ -240,7 +206,7 @@ def extract_name(text: str):
             return word
     return "Friend"
 
-def format_timestamp(timestamp_str):
+def format_timestamp(timestamp_str: str) -> str:
     """More reliable timestamp formatting with better contrast"""
     try:
         if isinstance(timestamp_str, str):
@@ -250,8 +216,8 @@ def format_timestamp(timestamp_str):
     except (ValueError, TypeError):
         return datetime.now().strftime("%H:%M")
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def cached_engine_answer(_engine, question: str) -> str:
+@st.cache_data(ttl=1800, show_spinner=False)  # Added TTL for freshness
+def cached_engine_answer(_engine: HybridEngine, question: str) -> str:
     logger.info(f"🔍 Engine processing question: '{question}'")
     start_time = time.time()
     
@@ -259,10 +225,7 @@ def cached_engine_answer(_engine, question: str) -> str:
         normalized = question.lower().strip()
         logger.debug(f"📤 Sending to engine: '{normalized}'")
         
-        # Use safe wrapper instead of direct engine call
-        logger.info("🟢 Sending to engine...")
-        response = safe_engine_answer(_engine, normalized)
-        logger.info("🟢 Engine returned!")
+        response = _engine.answer(normalized)
         
         processing_time = time.time() - start_time
         logger.info(f"✅ Engine response received in {processing_time:.2f}s: '{response[:100]}...'")
@@ -297,9 +260,9 @@ def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captur
 # Analytics with Batch Support
 # -----------------------------
 _analytics_lock = threading.Lock()
-_analytics_batch = {}
+_analytics_batch: Dict[str, int] = {}
 
-def get_analytics():
+def get_analytics() -> Dict[str, int]:
     """Get analytics from database"""
     default = {
         "total_messages": 0, "faq_questions": 0, "lead_captures": 0, 
@@ -307,12 +270,11 @@ def get_analytics():
     }
     try:
         db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
         
-        cursor.execute('SELECT key, value FROM analytics')
-        results = cursor.fetchall()
-        conn.close()
+            cursor.execute('SELECT key, value FROM analytics')
+            results = cursor.fetchall()
         
         db_analytics = {row[0]: row[1] for row in results}
         return {**default, **db_analytics}
@@ -320,7 +282,7 @@ def get_analytics():
         logger.error(f"Analytics load error: {e}")
         return default
 
-def update_analytics_batch(updates, immediate=False):
+def update_analytics_batch(updates: Dict[str, int], immediate: bool = False):
     """Batch update analytics with optional immediate flush"""
     global _analytics_batch
     
@@ -334,20 +296,19 @@ def update_analytics_batch(updates, immediate=False):
             if immediate or sum(_analytics_batch.values()) >= 10:
                 if _analytics_batch:
                     db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    
-                    for key, increment in _analytics_batch.items():
-                        cursor.execute('''
-                            INSERT INTO analytics (key, value, updated_at) 
-                            VALUES (?, ?, ?)
-                            ON CONFLICT(key) DO UPDATE SET 
-                            value = value + excluded.value,
-                            updated_at = excluded.updated_at
-                        ''', (key, increment, datetime.now().isoformat()))
-                    
-                    conn.commit()
-                    conn.close()
+                    with sqlite3.connect(db_path) as conn:
+                        cursor = conn.cursor()
+                        
+                        for key, increment in _analytics_batch.items():
+                            cursor.execute('''
+                                INSERT INTO analytics (key, value, updated_at) 
+                                VALUES (?, ?, ?)
+                                ON CONFLICT(key) DO UPDATE SET 
+                                value = value + excluded.value,
+                                updated_at = excluded.updated_at
+                            ''', (key, increment, datetime.now().isoformat()))
+                        
+                        conn.commit()
                     
                     # Update session state
                     if "analytics" in st.session_state:
@@ -378,7 +339,7 @@ if not api_key:
     1. **Get API key** from [OpenRouter](https://openrouter.ai/keys)
     2. **Add to Streamlit Secrets:**
        - Go to app settings → Secrets
-       - Add: OPENROUTER_API_KEY = "your-key-here"
+       - Add: `OPENROUTER_API_KEY = "your-key-here"`
     3. **Redeploy** the app
     """)
     st.stop()
@@ -402,18 +363,6 @@ try:
     start_time = time.time()
     
     engine = HybridEngine(api_key=api_key, client_id=client_id)
-    
-    # Debug engine initialization
-    logger.info(f"🔧 Engine initialized: {engine is not None}")
-    logger.info(f"🔧 API key length: {len(api_key) if api_key else 0}")
-    
-    # Test engine immediately
-    try:
-        logger.info("🧪 Testing engine with simple query...")
-        test_response = engine.answer("test")
-        logger.info(f"🧪 Engine test response: '{test_response}'")
-    except Exception as e:
-        logger.error(f"🧪 Engine test failed: {e}")
     
     init_time = time.time() - start_time
     logger.info(f"✅ HybridEngine initialized successfully in {init_time:.2f}s")
@@ -663,11 +612,9 @@ default_states = {
     "analytics": get_analytics(),
     "processing_active": False,
     "last_processed_time": 0,
-    "chat_container_key": 0,
     "user_message_count": 0,
     "last_lead_banner_shown": 0,
-    "last_error": None,
-    "force_rerun": False  # 🆕 ADDED: Force UI refresh
+    "last_error": None
 }
 
 for key, default_value in default_states.items():
@@ -686,46 +633,31 @@ for key, default_value in default_states.items():
 
 logger.debug(f"🔄 Session state initialized: {len(st.session_state.chat_history)} messages in history")
 
-def render_chat_container(show_typing=False):
-    """Smooth chat rendering with container management"""
-    chat_container = st.container()
+# -----------------------------
+# Chat Display Function
+# -----------------------------
+def display_chat():
+    """Display chat messages"""
+    st.markdown('<div class="conversation-scroll">', unsafe_allow_html=True)
     
-    with chat_container:
-        st.markdown('<div class="conversation-scroll">', unsafe_allow_html=True)
-        
-        # Display last 20 messages for performance
-        display_messages = st.session_state.chat_history[-20:]
-        
-        for msg in display_messages:
-            if "user" in msg:
-                st.markdown(
-                    f"<div class='user-msg'><b>You:</b> {msg['user']}"
-                    f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
-                    unsafe_allow_html=True
-                )
-            elif "bot" in msg:
-                st.markdown(
-                    f"<div class='bot-msg'><b>TedPro:</b> {msg['bot']}"
-                    f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
-                    unsafe_allow_html=True
-                )
-        
-        # Show typing indicator if requested
-        if show_typing:
-            st.markdown("""
-            <div class="typing-indicator">
-                Teddy is typing
-                <div class="typing-dots">
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+    # Display last 20 messages for performance
+    display_messages = st.session_state.chat_history[-20:]
     
-    return chat_container
+    for msg in display_messages:
+        if "user" in msg:
+            st.markdown(
+                f"<div class='user-msg'><b>You:</b> {msg['user']}"
+                f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
+                unsafe_allow_html=True
+            )
+        elif "bot" in msg:
+            st.markdown(
+                f"<div class='bot-msg'><b>TedPro:</b> {msg['bot']}"
+                f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
+                unsafe_allow_html=True
+            )
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # -----------------------------
 # Sidebar
@@ -792,12 +724,10 @@ with col1:
 with col2:
     if st.button("📜 History", key="header_history_toggle"):
         st.session_state.show_history = not st.session_state.show_history
-        st.session_state.force_rerun = True  # 🆕 Force refresh
 with col3:
     toggle_label = "❌ Hide" if st.session_state.show_quick_questions else "💡 Quick Q's"
     if st.button(toggle_label, key="quick_questions_toggle"):
         st.session_state.show_quick_questions = not st.session_state.show_quick_questions
-        st.session_state.force_rerun = True  # 🆕 Force refresh
 with col4:
     st.markdown(
         f'<div class="analytics-badge">🆕 {st.session_state.analytics.get("total_sessions", 0)}</div>',
@@ -840,13 +770,12 @@ if should_show_quick_questions and not st.session_state.processing_active:
         
         if submitted and selected_question:
             st.session_state.selected_quick_question = selected_question
-            st.session_state.force_rerun = True  # 🆕 Force refresh
             logger.info(f"🎯 Quick question selected: {selected_question}")
 
 # -----------------------------
 # Lead Banner
 # -----------------------------
-def should_show_lead_banner():
+def should_show_lead_banner() -> bool:
     """Determine if lead banner should be shown based on message count"""
     if st.session_state.lead_captured:
         return False
@@ -869,26 +798,15 @@ if should_show_lead_banner():
     st.session_state.last_lead_banner_shown = st.session_state.user_message_count
 
 # -----------------------------
-# Message Processing - FIXED VERSION
+# Message Processing
 # -----------------------------
-def process_message(user_input):
-    """Optimized message processing with enhanced features"""
-    if not user_input or st.session_state.processing_active:
-        logger.warning("⚠️ Skipping message - already processing or empty input")
-        return
-    
-    # 🚨 CRITICAL FIX: Double-check we're not already processing
-    if st.session_state.processing_active:
-        logger.error("🛑 Blocked duplicate processing attempt!")
-        return
-    
+def process_message(user_input: str):
+    """Optimized message processing with streaming and enhanced features"""
     # Rate limiting
     current_time = time.time()
     if current_time - st.session_state.last_processed_time < 0.5:
-        logger.warning("⚠️ Rate limiting active")
         return
     
-    st.session_state.processing_active = True
     st.session_state.last_processed_time = current_time
     
     logger.info(f"🔄 Processing message: '{user_input}'")
@@ -896,11 +814,6 @@ def process_message(user_input):
     try:
         # Track user message count for lead banner logic
         st.session_state.user_message_count += 1
-        
-        # Add user message to history
-        user_message_data = {"user": user_input, "timestamp": datetime.now().isoformat()}
-        st.session_state.chat_history.append(user_message_data)
-        append_to_conversation_db("user", user_input, st.session_state.session_id)
         
         # Analytics updates
         analytics_updates = {"total_messages": 1}
@@ -929,39 +842,84 @@ def process_message(user_input):
                     logger.error(f"Lead capture error: {e}")
                     st.session_state.last_error = str(e)
         
-        # 🚨 CRITICAL FIX: Force immediate UI update with user message
-        st.session_state.force_rerun = True
-        st.rerun()
-        
-        # Process the main response
+        # Process the main response with streaming
         start_time = time.time()
         
         try:
             user_messages_before = len([m for m in st.session_state.chat_history if "user" in m])
             is_first = user_messages_before == 1
             
-            raw_response = cached_engine_answer(engine, user_input)
-            filtered_response = teddy_filter(user_input, raw_response, is_first, st.session_state.lead_captured)
+            # Stream the raw response
+            bot_placeholder = st.empty()
+            bot_placeholder.markdown("""
+            <div class="typing-indicator">
+                Teddy is typing
+                <div class="typing-dots">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             
-            # Add main bot response
+            raw_response = ""
+            first_chunk = True
+            friendly_prefix = "Hi there, friend! 🧸 " if is_first else ""
+            
+            for chunk in engine.stream_answer(user_input):
+                if first_chunk:
+                    raw_response += friendly_prefix + chunk
+                    first_chunk = False
+                else:
+                    raw_response += chunk
+                # Update placeholder with growing response
+                bot_placeholder.markdown(
+                    f"<div class='bot-msg'><b>TedPro:</b> {raw_response}"
+                    f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
+                    unsafe_allow_html=True
+                )
+            
+            # Apply sales tail after full response
+            sales_tail = ""
+            if not st.session_state.lead_captured:
+                if any(k in user_input_lower for k in ["gift", "present", "birthday", "anniversary"]):
+                    sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁"
+                elif any(k in user_input_lower for k in ["price", "how much", "cost", "buy"]):
+                    sales_tail = " I can also compare sizes to help you get the best value."
+                elif any(k in user_input_lower for k in ["custom", "personalize", "embroidery"]):
+                    sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote."
+            
+            if any(k in user_input_lower for k in ["buy", "order", "purchase"]):
+                sales_tail += " 💳 You can place your order anytime at [Cuddleheroes Store](https://cuddleheroes.example.com)."
+            
+            filtered_response = raw_response + sales_tail
+            
+            # Final update with filtered response
+            bot_placeholder.markdown(
+                f"<div class='bot-msg'><b>TedPro:</b> {filtered_response}"
+                f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
+                unsafe_allow_html=True
+            )
+            
+            # Add main bot response to history and DB
             bot_message_data = {"bot": filtered_response, "timestamp": datetime.now().isoformat()}
             st.session_state.chat_history.append(bot_message_data)
             append_to_conversation_db("assistant", filtered_response, st.session_state.session_id)
             
             # Add personalized lead capture acknowledgment
             if extracted_email and extracted_email in st.session_state.captured_emails:
+                lead_placeholder = st.empty()
                 lead_message = f"📧 Thanks, {extracted_name}! I've added {extracted_email} to our updates list!"
+                lead_placeholder.markdown(
+                    f"<div class='bot-msg'><b>TedPro:</b> {lead_message}"
+                    f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
+                    unsafe_allow_html=True
+                )
                 lead_message_data = {"bot": lead_message, "timestamp": datetime.now().isoformat()}
                 st.session_state.chat_history.append(lead_message_data)
                 append_to_conversation_db("assistant", lead_message, st.session_state.session_id)
             
-            # Calculate processing time with guaranteed minimum display
             processing_time = time.time() - start_time
-            min_display_time = random.uniform(1.2, 1.8)
-            
-            if processing_time < min_display_time:
-                time.sleep(min_display_time - processing_time)
-                
             logger.info(f"✅ Message processed successfully in {processing_time:.2f}s")
                 
         except Exception as e:
@@ -969,8 +927,14 @@ def process_message(user_input):
             logger.error(f"❌ Message processing error after {processing_time:.2f}s: {str(e)}")
             logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
             st.session_state.last_error = str(e)
+            error_message = f"I'm having a little trouble right now. Please try again soon! 🧸 (Error: {str(e)})"
+            bot_placeholder.markdown(
+                f"<div class='bot-msg'><b>TedPro:</b> {error_message}"
+                f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
+                unsafe_allow_html=True
+            )
             error_message_data = {
-                "bot": f"I'm having a little trouble right now. Please try again soon! 🧸 (Error: {str(e)})", 
+                "bot": error_message, 
                 "timestamp": datetime.now().isoformat()
             }
             st.session_state.chat_history.append(error_message_data)
@@ -981,39 +945,44 @@ def process_message(user_input):
         
     finally:
         st.session_state.processing_active = False
-        # 🚨 CRITICAL FIX: Force final UI update with bot response
-        st.session_state.force_rerun = True
         logger.debug("🔄 Message processing completed")
+        st.rerun()  # Final rerun to ensure clean display without typing
 
 # Main chat rendering
 if st.session_state.show_history:
     st.subheader("📜 Conversation History")
     if st.session_state.chat_history:
-        render_chat_container()
+        display_chat()
     else:
         st.info("No chat history yet!")
 else:
     if st.session_state.chat_history:
-        render_chat_container()
+        display_chat()
     elif not st.session_state.show_quick_questions:
         st.info("💬 Start a conversation or click '💡 Quick Q's' for common questions!")
 
-# Process quick question
+# Process quick question or user input
+user_input = st.chat_input("Ask me about plushies, pricing, shipping, or anything else! 🧸", disabled=st.session_state.processing_active)
+
 if st.session_state.selected_quick_question and not st.session_state.processing_active:
     logger.info(f"🎯 Processing quick question: {st.session_state.selected_quick_question}")
-    process_message(st.session_state.selected_quick_question)
+    user_input = st.session_state.selected_quick_question
     st.session_state.selected_quick_question = None
 
-# Process regular chat input
-user_input = st.chat_input("Ask me about plushies, pricing, shipping, or anything else! 🧸")
 if user_input and not st.session_state.processing_active:
-    logger.info(f"💬 User input received: {user_input}")
-    process_message(user_input)
+    logger.info(f"💬 Input received: {user_input}")
+    st.session_state.processing_active = True
+    append_to_conversation_db("user", user_input, st.session_state.session_id)
+    st.session_state.chat_history.append({"user": user_input, "timestamp": datetime.now().isoformat()})
+    st.rerun()  # Rerun to show user message and start processing
 
-# 🚨 CRITICAL FIX: Force rerun when needed
-if st.session_state.get('force_rerun', False):
-    st.session_state.force_rerun = False
-    st.rerun()
+# If last message is user and processing active, process the response
+if (
+    st.session_state.chat_history
+    and "user" in st.session_state.chat_history[-1]
+    and st.session_state.processing_active
+):
+    process_message(st.session_state.chat_history[-1]["user"])
 
 # Flush analytics
 update_analytics_batch({}, immediate=True)
@@ -1027,7 +996,7 @@ st.markdown("""
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by Tash & Hendrik 🧸</small>
 <br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.3 - UI Refresh Fixed</small>
+<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Complete Version</small>
 </center>
 """, unsafe_allow_html=True)
 
