@@ -4,7 +4,7 @@ from pathlib import Path
 import sqlite3
 import requests
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Generator
 import hashlib
 import time
 from datetime import datetime
@@ -18,8 +18,9 @@ class HybridEngine:
         self.client_path = Path("/tmp") / client_id
         self.client_path.mkdir(parents=True, exist_ok=True)
         self.knowledge_base = self.load_knowledge_base()
-        self.conversation_history = []
+        self.conversation_history: List[Dict[str, str]] = []
         self.logger = logging.getLogger("HybridEngine")
+        self.session = requests.Session()  # Persistent session for better performance
         self.logger.info(f"🔧 HybridEngine initialized with API key: {bool(api_key)}")
         
     def load_knowledge_base(self) -> Dict:
@@ -38,8 +39,8 @@ class HybridEngine:
             json.dump(self.knowledge_base, f, indent=2)
     
     def answer(self, question: str) -> str:
-        """Generate answer using hybrid approach - ACTUALLY CALLS OPENROUTER"""
-        self.logger.info(f"🔍 Processing question: '{question}'")
+        """Generate answer using hybrid approach - ACTUALLY CALLS OPENROUTER (non-streaming)"""
+        self.logger.info(f"🔍 Processing question (non-stream): '{question}'")
         start_time = time.time()
         
         try:
@@ -51,8 +52,8 @@ class HybridEngine:
             
             self.logger.info("🌐 No local match, calling OpenRouter API...")
             
-            # ACTUAL API CALL to OpenRouter
-            api_response = self.get_api_answer(question)
+            # ACTUAL API CALL to OpenRouter (non-streaming)
+            api_response = self.get_api_answer(question, stream=False)
             
             response_time = time.time() - start_time
             self.logger.info(f"✅ OpenRouter API response received in {response_time:.2f}s")
@@ -64,14 +65,36 @@ class HybridEngine:
             self.logger.error(f"❌ Error after {response_time:.2f}s: {str(e)}")
             return self.get_fallback_answer(question)
     
+    def stream_answer(self, question: str) -> Generator[str, None, None]:
+        """Stream answer using hybrid approach - ACTUALLY CALLS OPENROUTER (streaming)"""
+        self.logger.info(f"🔍 Processing question (stream): '{question}'")
+        start_time = time.time()
+        
+        try:
+            # First try local knowledge base
+            local_answer = self.search_local_knowledge(question)
+            if local_answer:
+                self.logger.info("✅ Using local knowledge base answer (streaming as single chunk)")
+                yield local_answer
+                return
+            
+            self.logger.info("🌐 No local match, streaming from OpenRouter API...")
+            
+            # ACTUAL API CALL to OpenRouter (streaming)
+            for chunk in self.get_api_answer(question, stream=True):
+                yield chunk
+            
+            response_time = time.time() - start_time
+            self.logger.info(f"✅ OpenRouter API stream completed in {response_time:.2f}s")
+                
+        except Exception as e:
+            response_time = time.time() - start_time
+            self.logger.error(f"❌ Stream error after {response_time:.2f}s: {str(e)}")
+            yield self.get_fallback_answer(question)
+    
     def search_local_knowledge(self, question: str) -> Optional[str]:
         """Search local FAQ and knowledge base"""
         question_lower = question.lower()
-        
-        # Simple greetings - respond immediately without API call
-        greetings = ["hi", "hello", "hey", "hola", "greetings", "howdy"]
-        if question_lower.strip() in greetings:
-            return "Hello there! 🧸 I'm TedPro, your friendly plushie assistant! How can I help you today? Whether you have questions about our products, shipping, or custom orders, I'm here to help!"
         
         # Check FAQs
         for faq in self.knowledge_base.get("faqs", []):
@@ -85,59 +108,99 @@ class HybridEngine:
         
         return None
     
-    def get_api_answer(self, question: str) -> str:
-        """ACTUAL OpenRouter API call with proper error handling"""
-        self.logger.info(f"📡 Making OpenRouter API request...")
+    def get_api_answer(self, question: str, stream: bool = False) -> Generator[str, None, None] | str:
+        """ACTUAL OpenRouter API call with proper error handling and retry"""
+        self.logger.info(f"📡 Making OpenRouter API request (stream={stream})...")
         
         try:
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://ted-pro.streamlit.app",
-                "X-Title": "TedPro Assistant"
+                "HTTP-Referer": "https://ted-pro.streamlit.app",  # Required by OpenRouter
+                "X-Title": "TedPro Assistant"  # Required by OpenRouter
             }
             
             data = {
-                "model": "openai/gpt-3.5-turbo",
+                "model": "openai/gpt-3.5-turbo",  # You can change this to other models
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are TedPro, a friendly plushie marketing assistant. Be warm, helpful, and concise. Use emojis occasionally. Keep responses under 3 sentences unless more detail is needed."""
+                        "content": """You are TedPro, a friendly plushie marketing assistant for a company called CuddleHeroes. 
+
+About CuddleHeroes:
+- We sell high-quality plushies and stuffed animals
+- We offer customization options (embroidery, colors, sizes)
+- We ship internationally
+- We have a 30-day return policy
+- We offer gift wrapping and personalized notes
+
+Your personality:
+- Warm, friendly, and enthusiastic about plushies 🧸
+- Helpful and informative about products
+- Gently promotional when appropriate
+- Use emojis occasionally to be engaging
+
+Keep responses concise but helpful. If you don't know specific details, suggest checking the website or contacting support."""
                     },
                     {
                         "role": "user", 
                         "content": question
                     }
                 ],
-                "max_tokens": 150,
-                "temperature": 0.7
+                "max_tokens": 500,
+                "temperature": 0.7,
+                "stream": stream
             }
             
             self.logger.info(f"🔑 Using API key: {self.api_key[:10]}...")
+            self.logger.info(f"📤 Sending request to: {url}")
             
-            # CRITICAL FIX: Reduced timeout to 15 seconds
-            response = requests.post(url, headers=headers, json=data, timeout=15)
+            # Retry logic (up to 2 retries)
+            for attempt in range(3):
+                try:
+                    response = self.session.post(url, headers=headers, json=data, timeout=30, stream=stream)
+                    if response.status_code == 200:
+                        break
+                    else:
+                        self.logger.warning(f"⚠️ API attempt {attempt+1} failed: {response.status_code} {response.text}")
+                        time.sleep(1)  # Backoff
+                except requests.exceptions.RequestException as e:
+                    self.logger.warning(f"⚠️ API attempt {attempt+1} exception: {str(e)}")
+                    time.sleep(1)
+            else:
+                raise ValueError(f"API failed after 3 attempts: {response.status_code} {response.text}")
+            
             self.logger.info(f"📥 Response status: {response.status_code}")
             
-            if response.status_code == 200:
-                result = response.json()
-                answer = result['choices'][0]['message']['content']
-                self.logger.info(f"✅ API success: {answer[:100]}...")
-                return answer
+            if stream:
+                for line in response.iter_lines(decode_unicode=True):
+                    if line and line.startswith("data: "):
+                        if line == "data: [DONE]":
+                            break
+                        try:
+                            data_json = json.loads(line[6:])
+                            if 'choices' in data_json and data_json['choices']:
+                                delta = data_json['choices'][0]['delta']
+                                if 'content' in delta:
+                                    yield delta['content']
+                        except json.JSONDecodeError:
+                            self.logger.warning(f"Invalid JSON in stream: {line}")
+                return
+            
             else:
-                self.logger.error(f"❌ API error {response.status_code}: {response.text}")
-                return "I'm having trouble connecting right now. Please try again! 🧸"
+                result = response.json()
+                return result['choices'][0]['message']['content']
                 
         except requests.exceptions.Timeout:
-            self.logger.error("⏰ API request timed out after 15 seconds")
-            return "I'm taking a bit longer than usual to respond. Please try again! 🧸"
+            self.logger.error("⏰ API request timed out")
+            raise
         except requests.exceptions.ConnectionError:
             self.logger.error("🔌 API connection error")
-            return "I'm having trouble connecting to my knowledge base. Please check your internet connection! 🧸"
+            raise
         except Exception as e:
             self.logger.error(f"❌ Unexpected API error: {str(e)}")
-            return "I encountered an unexpected error. Please try again! 🧸"
+            raise
     
     def get_fallback_answer(self, question: str) -> str:
         """Fallback answer when API fails"""
@@ -145,6 +208,7 @@ class HybridEngine:
             "I'd love to help with that! Let me check my resources and get back to you with the best information. 🧸",
             "That's a great question! I'm here to help with all things plushies. Let me find the perfect answer for you. 🎁",
             "Thanks for your question! I specialize in plushie products and would be happy to assist you. 💫",
+            "I'm currently experiencing some technical difficulties. Please try again in a moment! 🧸"
         ]
         return random.choice(fallback_responses)
     
@@ -153,18 +217,23 @@ class HybridEngine:
         try:
             # Use /tmp directory for Streamlit Cloud compatibility
             db_path = Path("/tmp") / f"{self.client_id}_chat_data.db"
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
             
-            cursor.execute('''
-                INSERT OR IGNORE INTO leads (name, email, context, timestamp)
-                VALUES (?, ?, ?, ?)
-            ''', (name, email, context, datetime.now().isoformat()))
+                cursor.execute('''
+                    INSERT OR IGNORE INTO leads (name, email, context, timestamp)
+                    VALUES (?, ?, ?, ?)
+                ''', (name, email, context, datetime.now().isoformat()))
             
-            conn.commit()
-            conn.close()
+                conn.commit()
             self.logger.info(f"📧 Lead captured: {name} <{email}>")
             
         except Exception as e:
             self.logger.error(f"Lead capture error: {e}")
             raise
+
+    def learn_from_interaction(self, question: str, answer: str, feedback: Optional[str] = None):
+        """Learn from user interactions to improve responses"""
+        # This would be your learning logic
+        # For now, just log the interaction
+        self.logger.debug(f"Learning from interaction - Q: {question}, A: {answer}, Feedback: {feedback}")
