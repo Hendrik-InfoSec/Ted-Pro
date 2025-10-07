@@ -38,15 +38,24 @@ logger = logging.getLogger("TedPro")
 # -----------------------------
 def safe_engine_answer(engine, question):
     """Wrapper with timeout protection around engine calls"""
+    logger.info(f"🚀 Engine answering: '{question}'")
+    start_time = time.time()
+    
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(engine.answer, question)
-            return future.result(timeout=25)
+            result = future.result(timeout=25)
+            elapsed = time.time() - start_time
+            logger.info(f"✅ Engine answered in {elapsed:.2f}s: '{result[:80]}...'")
+            return result
     except concurrent.futures.TimeoutError:
-        logger.error(f"❌ Engine timeout after 25 seconds for: '{question}'")
+        elapsed = time.time() - start_time
+        logger.error(f"❌ Engine timeout after {elapsed:.2f}s for: '{question}'")
         return "Teddy got a bit sleepy waiting for a reply! 🧸 Please try again in a moment."
     except Exception as e:
-        logger.error(f"❌ Engine error in safe wrapper: {e}")
+        elapsed = time.time() - start_time
+        logger.error(f"❌ Engine error after {elapsed:.2f}s: {e}")
+        logger.error(traceback.format_exc())
         return f"I'm having trouble right now. Please try again! 🧸 (Error: {str(e)})"
 
 # -----------------------------
@@ -91,6 +100,7 @@ def show_debug_panel():
         st.write("**Session Info:**")
         st.write(f"Session ID: {st.session_state.get('session_id', 'None')}")
         st.write(f"Messages: {len(st.session_state.get('chat_history', []))}")
+        st.write(f"Processing Active: {st.session_state.get('processing_active', False)}")
         
         # Clear cache button
         if st.button("🔄 Clear Cache"):
@@ -369,7 +379,7 @@ if not api_key:
     1. **Get API key** from [OpenRouter](https://openrouter.ai/keys)
     2. **Add to Streamlit Secrets:**
        - Go to app settings → Secrets
-       - Add: `OPENROUTER_API_KEY = "your-key-here"`
+       - Add: OPENROUTER_API_KEY = "your-key-here"
     3. **Redeploy** the app
     """)
     st.stop()
@@ -861,11 +871,18 @@ if should_show_lead_banner():
 def process_message(user_input):
     """Optimized message processing with enhanced features"""
     if not user_input or st.session_state.processing_active:
+        logger.warning("⚠️ Skipping message - already processing or empty input")
+        return
+    
+    # 🚨 CRITICAL FIX: Double-check we're not already processing
+    if st.session_state.processing_active:
+        logger.error("🛑 Blocked duplicate processing attempt!")
         return
     
     # Rate limiting
     current_time = time.time()
     if current_time - st.session_state.last_processed_time < 0.5:
+        logger.warning("⚠️ Rate limiting active")
         return
     
     st.session_state.processing_active = True
@@ -1000,7 +1017,7 @@ st.markdown("""
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by Tash & Hendrik 🧸</small>
 <br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.0 - Debug Enhanced</small>
+<small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - API Timeout Fixed</small>
 </center>
 """, unsafe_allow_html=True)
 
