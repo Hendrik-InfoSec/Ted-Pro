@@ -48,7 +48,7 @@ class HybridEngine:
     
     def answer(self, question: str, lang: str = "en") -> str:
         """Generate answer using hybrid approach - ACTUALLY CALLS OPENROUTER (non-streaming)"""
-        self.logger.info(f"🔍 Processing question (non-stream): '{question}' (lang: {lang})")
+        self.logger.info(f"🔍 Processing question (non-stream): '{question}'")
         start_time = time.time()
         try:
             local_answer = self.search_local_knowledge(question)
@@ -56,18 +56,18 @@ class HybridEngine:
                 self.logger.info("✅ Using local knowledge base answer")
                 return local_answer
             self.logger.info("🌐 No local match, calling OpenRouter API...")
-            api_response = self.get_api_answer(question, stream=False, lang=lang)
+            api_response = self.get_api_answer(question, stream=False)
             response_time = time.time() - start_time
             self.logger.info(f"✅ OpenRouter API response received in {response_time:.2f}s")
             return api_response
         except Exception as e:
             response_time = time.time() - start_time
             self.logger.error(f"❌ Error after {response_time:.2f}s: {str(e)}", exc_info=True)
-            return self.get_fallback_answer(question, lang)
-    
+            return self.get_fallback_answer(question)
+
     def stream_answer(self, question: str, lang: str = "en") -> Generator[str, None, None]:
         """Stream answer using hybrid approach - ACTUALLY CALLS OPENROUTER (streaming)"""
-        self.logger.info(f"🔍 Processing question (stream): '{question}' (lang: {lang})")
+        self.logger.info(f"🔍 Processing question (stream): '{question}'")
         start_time = time.time()
         try:
             local_answer = self.search_local_knowledge(question)
@@ -76,15 +76,15 @@ class HybridEngine:
                 yield local_answer
                 return
             self.logger.info("🌐 No local match, streaming from OpenRouter API...")
-            for chunk in self.get_api_answer(question, stream=True, lang=lang):
+            for chunk in self.get_api_answer(question, stream=True):
                 yield chunk
             response_time = time.time() - start_time
             self.logger.info(f"✅ OpenRouter API stream completed in {response_time:.2f}s")
         except Exception as e:
             response_time = time.time() - start_time
             self.logger.error(f"❌ Stream error after {response_time:.2f}s: {str(e)}", exc_info=True)
-            yield self.get_fallback_answer(question, lang)
-    
+            yield self.get_fallback_answer(question)
+
     def search_local_knowledge(self, question: str) -> Optional[str]:
         """Search local FAQ and knowledge base"""
         question_lower = question.lower()
@@ -96,11 +96,10 @@ class HybridEngine:
                 return f"We have {product['name']} available! {product.get('description', '')}"
         return None
     
-    def get_api_answer(self, question: str, stream: bool = False, lang: str = "en") -> Generator[str, None, None] | str:
+    def get_api_answer(self, question: str, stream: bool = False) -> Generator[str, None, None] | str:
         """ACTUAL OpenRouter API call with proper error handling and retry"""
-        self.logger.info(f"📡 Making OpenRouter API request (stream={stream}, lang={lang})...")
-        system_prompts = {
-            "en": """You are TedPro, a friendly plushie marketing assistant for a company called CuddleHeroes. 
+        self.logger.info(f"📡 Making OpenRouter API request (stream={stream})...")
+        system_prompt = """You are TedPro, a friendly plushie marketing assistant for a company called CuddleHeros. 
 About CuddleHeros:
 - We sell high-quality plushies and stuffed animals
 - We offer customization options (embroidery, colors, sizes)
@@ -112,21 +111,7 @@ Your personality:
 - Helpful and informative about products
 - Gently promotional when appropriate
 - Use emojis occasionally to be engaging
-Keep responses concise but helpful. If you don't know specific details, suggest checking the website or contacting support.""",
-            "es": """Eres TedPro, un asistente de marketing de peluches amigable para una empresa llamada CuddleHeros.
-Sobre CuddleHeros:
-- Vendemos peluches y animales de peluche de alta calidad
-- Ofrecemos opciones de personalización (bordados, colores, tallas)
-- Realizamos envíos internacionales
-- Tenemos una política de devolución de 30 días
-- Ofrecemos envoltura de regalo y notas personalizadas
-Tu personalidad:
-- Cálida, amigable y entusiasta sobre los peluches 🧸
-- Útil e informativo sobre los productos
-- Suavemente promocional cuando sea apropiado
-- Usa emojis ocasionalmente para ser atractivo
-Mantén las respuestas concisas pero útiles. Si no sabes detalles específicos, sugiere revisar el sitio web o contactar soporte."""
-        }
+Keep responses concise but helpful. If you don't know specific details, suggest checking the website or contacting support."""
         try:
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {
@@ -136,9 +121,9 @@ Mantén las respuestas concisas pero útiles. Si no sabes detalles específicos,
                 "X-Title": "TedPro Assistant"
             }
             data = {
-                "model": self.model,  # Use configurable model (e.g., xai/deepseek)
+                "model": self.model,
                 "messages": [
-                    {"role": "system", "content": system_prompts[lang]},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": question}
                 ],
                 "max_tokens": 500,
@@ -190,21 +175,13 @@ Mantén las respuestas concisas pero útiles. Si no sabes detalles específicos,
     
     def get_fallback_answer(self, question: str, lang: str = "en") -> str:
         """Fallback answer when API fails"""
-        fallback_responses = {
-            "en": [
-                "I'd love to help with that! Let me check my resources and get back to you with the best information. 🧸",
-                "That's a great question! I'm here to help with all things plushies. Let me find the perfect answer for you. 🎁",
-                "Thanks for your question! I specialize in plushie products and would be happy to assist you. 💫",
-                "I'm currently experiencing some technical difficulties. Please try again in a moment! 🧸"
-            ],
-            "es": [
-                "¡Me encantaría ayudar con eso! Déjame revisar mis recursos y te responderé con la mejor información. 🧸",
-                "¡Esa es una gran pregunta! Estoy aquí para ayudar con todo lo relacionado con peluches. Déjame encontrar la respuesta perfecta. 🎁",
-                "¡Gracias por tu pregunta! Me especializo en productos de peluches y estaré encantado de ayudarte. 💫",
-                "Estoy teniendo dificultades técnicas. ¡Por favor intenta de nuevo en un momento! 🧸"
-            ]
-        }
-        return random.choice(fallback_responses[lang])
+        fallback_responses = [
+            "I'd love to help with that! Let me check my resources and get back to you with the best information. 🧸",
+            "That's a great question! I'm here to help with all things plushies. Let me find the perfect answer for you. 🎁",
+            "Thanks for your question! I specialize in plushie products and would be happy to assist you. 💫",
+            "I'm currently experiencing some technical difficulties. Please try again in a moment! 🧸"
+        ]
+        return random.choice(fallback_responses)
     
     def add_lead(self, name: str, email: str, context: str = "chat_capture"):
         """Add a new lead to the database"""
@@ -223,21 +200,24 @@ Mantén las respuestas concisas pero útiles. Si no sabes detalles específicos,
             raise
 
     def transcribe_audio(self, audio_data: bytes) -> Optional[str]:
-        """Placeholder for audio transcription (e.g., using Whisper API)"""
-        self.logger.info("🎙️ Processing audio input (mock transcription)")
-        # Mock transcription - replace with Whisper API call when ready
-        return "Mock transcribed text from audio input"  # TODO: Integrate Whisper API
-        # Example Whisper integration (uncomment when ready):
-        # try:
-        #     response = requests.post("https://api.openai.com/v1/audio/transcriptions", 
-        #         headers={"Authorization": f"Bearer {self.api_key}"}, 
-        #         files={"file": ("audio.wav", audio_data, "audio/wav")},
-        #         data={"model": "whisper-1", "language": "en"})
-        #     return response.json().get("text")
-        # except Exception as e:
-        #     self.logger.error(f"Audio transcription error: {e}", exc_info=True)
-        #     return None
-
-    def learn_from_interaction(self, question: str, answer: str, feedback: Optional[str] = None):
-        """Learn from user interactions to improve responses"""
-        self.logger.debug(f"Learning from interaction - Q: {question}, A: {answer}, Feedback: {feedback}")
+        """Placeholder for audio transcription with enhanced error handling"""
+        self.logger.info("🎙️ Attempting audio transcription")
+        try:
+            # Mock transcription - replace with Whisper API when ready
+            self.logger.warning("🎙️ Using mock transcription - Whisper API not integrated")
+            return "Mock transcribed text from audio input"  # TODO: Integrate Whisper API
+            # Example Whisper integration (uncomment when ready):
+            # response = requests.post(
+            #     "https://api.openai.com/v1/audio/transcriptions",
+            #     headers={"Authorization": f"Bearer {self.api_key}"},
+            #     files={"file": ("audio.wav", audio_data, "audio/wav")},
+            #     data={"model": "whisper-1", "language": "en"}
+            # )
+            # if response.status_code == 200:
+            #     return response.json().get("text")
+            # else:
+            #     self.logger.error(f"Whisper API failed: {response.status_code} {response.text}")
+            #     return None
+        except Exception as e:
+            self.logger.error(f"🎙️ Audio transcription error: {e}", exc_info=True)
+            return None
