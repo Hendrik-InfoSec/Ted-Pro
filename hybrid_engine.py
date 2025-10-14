@@ -33,7 +33,7 @@ class HybridEngine:
             return local_answer
         self.logger.info("No local match, streaming from OpenRouter API...")
         if stream:
-            return "".join(list(self.stream_answer(question)))
+            return "".join([chunk for chunk in self.stream_answer(question)])
         else:
             return self.get_api_answer(question, stream=False)
 
