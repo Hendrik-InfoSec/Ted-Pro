@@ -18,14 +18,13 @@ class HybridEngine:
     def search_local_db(self, question: str) -> Optional[str]:
         # Placeholder: Implement actual DB search if needed (e.g., using SQLite or vector DB)
         # For now, always return None to fallback to API
-        self.logger.info("Checking local DB for match......")
+        self.logger.info("Checking local DB for match...")
         return None
 
     def transcribe_audio(self, audio_data: bytes, lang: str = "en") -> str:
         self.logger.info(f"Attempting audio transcription (lang={lang})")
         # Placeholder: Integrate Whisper API or local model here
-        self.logger.warning("Using mock transcription - Whisper <Whisper API not integrated>")
->")
+        self.logger.warning("Using mock transcription - Whisper API not integrated")
         return "Mock transcribed text from audio input"  # Mock response
 
     def process_question(self, question: str, stream: bool = True) -> str:
