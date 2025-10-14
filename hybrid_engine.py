@@ -37,7 +37,11 @@ class HybridEngine:
         else:
             return self.get_api_answer(question, stream=False)
 
-    def stream_answer(self, question: str) -> Generator[str, None, None]:
+    def stream_answer(self, question: str, *args, **kwargs) -> Generator[str, None, None]:
+        # Added *args, **kwargs to flexibly accept extra positional/keyword args passed by main.py
+        # Logs and ignores extras to prevent TypeError; adjust if they are needed (e.g., timeout)
+        if args or kwargs:
+            self.logger.warning(f"stream_answer received extra args: {args}, kwargs: {kwargs} - ignoring for compatibility")
         self.logger.info(f"Processing question (stream): '{question}'")
         try:
             for chunk in self.get_api_answer(question, stream=True):
@@ -113,6 +117,6 @@ class HybridEngine:
 
 # Example usage (deployment ready - integrate into your main.py)
 # if __name__ == "__main__":
-#     engine = HybridEngine(api_key="your_openrouter_api_key_here", client_id="6a63fa70-434c-47eb-b395-afd93a53240c")
+#     engine = HybridEngine(api_key="your_openrouter_api_key_here", client_id="tedpro_client")
 #     answer_gen = engine.process_question("Hello, who are you?")
 #     print(answer_gen)
