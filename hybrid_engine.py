@@ -3,6 +3,8 @@ import os
 import json
 import time
 import requests
+import tempfile
+import openai  # Added for real transcription
 from typing import Generator, Optional
 
 class HybridEngine:
@@ -13,7 +15,9 @@ class HybridEngine:
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         self.db_path = db_path  # Placeholder for local DB if implemented
         self.client_id = client_id  # Optional: For tracking per-client usage or sessions
-        self.leads = []  # In-memory lead storage for demo/prod (replace with DB in main.py if needed)
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")  # For Whisper transcription
+        if not self.openai_api_key:
+            self.logger.warning("OPENAI_API_KEY not found - using mock transcription")
         self.logger.info(f"HybridEngine initialized with API key: {bool(api_key)}, model: {model}, client_id: {client_id}")
 
     def search_local_db(self, question: str) -> Optional[str]:
@@ -24,25 +28,34 @@ class HybridEngine:
 
     def transcribe_audio(self, audio_data: bytes, lang: str = "en") -> str:
         self.logger.info(f"Attempting audio transcription (lang={lang})")
-        # Placeholder: Integrate Whisper API or local model here
-        self.logger.warning("Using mock transcription - Whisper API not integrated")
-        return "Mock transcribed text from audio input"  # Mock response
-
-    def add_lead(self, name: str, email: str, context: str = "chat"):
-        """Capture lead with hashing for privacy"""
-        hashed_email = hashlib.sha256(email.encode()).hexdigest()
+        if not self.openai_api_key:
+            self.logger.warning("Using mock transcription - OPENAI_API_KEY not set")
+            return "Mock transcribed text from audio input"
+        
         try:
-            with get_db_connection() as conn:  # Use shared DB conn from main.py scope or pass
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO leads (name, hashed_email, context, timestamp, consent)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (name, hashed_email, context, datetime.now().isoformat(), "YES"))
-                conn.commit()
-            self.logger.info(f"Lead added: {name} <{hashed_email}> via {context}")
+            # Save audio to temp file (Streamlit audio_input gives bytes)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_file.write(audio_data)
+                temp_file_path = temp_file.name
+            
+            # Transcribe with Whisper
+            openai.api_key = self.openai_api_key
+            with open(temp_file_path, "rb") as audio_file:
+                response = openai.Audio.transcribe(
+                    model="whisper-1",
+                    file=audio_file,
+                    language=lang
+                )
+            transcribed_text = response['text']
+            
+            # Clean up temp file
+            os.unlink(temp_file_path)
+            
+            self.logger.info(f"Transcription successful: {transcribed_text[:50]}...")
+            return transcribed_text
         except Exception as e:
-            self.logger.error(f"Lead add error: {str(e)}")
-            raise
+            self.logger.error(f"Audio transcription error: {str(e)}")
+            return "Error transcribing audio - please try again or type your message."
 
     def process_question(self, question: str, stream: bool = True) -> str:
         local_answer = self.search_local_db(question)
