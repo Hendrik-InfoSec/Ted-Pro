@@ -32,7 +32,7 @@ logging.basicConfig(
     handlers=[RichHandler(rich_tracebacks=True)]
 )
 logger = logging.getLogger("TedPro")
-client_id = "tedpro_client"  # Defined early
+client_id = "tedpro_client"
 
 # Database Setup with Connection Pooling
 def get_db_connection():
@@ -186,13 +186,13 @@ def format_timestamp(timestamp_str: str) -> str:
         return datetime.now().strftime("%H:%M")
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def cached_engine_answer(_engine: HybridEngine, question: str, lang: str) -> str:
-    logger.info(f"🔍 Engine processing question: '{question}' (lang: {lang})")
+def cached_engine_answer(_engine: HybridEngine, question: str) -> str:
+    logger.info(f"🔍 Engine processing question: '{question}'")
     start_time = time.time()
     try:
         normalized = question.lower().strip()
         logger.debug(f"📤 Sending to engine: '{normalized}'")
-        response = _engine.answer(normalized, lang)
+        response = _engine.answer(normalized, "en")
         processing_time = time.time() - start_time
         logger.info(f"✅ Engine response received in {processing_time:.2f}s: '{response[:100]}...'")
         return response
@@ -276,7 +276,7 @@ def render_admin_dashboard():
     st.subheader("Leads")
     leads_df = get_leads_df()
     if not leads_df.empty:
-        leads_df['est_value'] = leads_df['context'].apply(lambda x: 5 if 'sidebar' in x else 2)  # $ per lead
+        leads_df['est_value'] = leads_df['context'].apply(lambda x: 5 if 'sidebar' in x else 2)
         st.dataframe(leads_df, use_container_width=True)
         st.metric("Est. Total Lead Value", f"${leads_df['est_value'].sum()}")
         csv = leads_df.to_csv(index=False)
@@ -387,7 +387,7 @@ except Exception as e:
 
 # Multi-Page Setup
 pages = {
-    "Chat": lambda: None,  # Main chat page (defined below)
+    "Chat": lambda: None,
     "Admin Dashboard": render_admin_dashboard
 }
 page = st.sidebar.selectbox("Select Page", list(pages.keys()), key="page_selector")
@@ -622,7 +622,7 @@ default_states = {
     "chat_history": [],
     "show_history": False,
     "lead_captured": False,
-    "lead_consent": False,  # Added for consent
+    "lead_consent": False,
     "captured_emails": set(),
     "selected_quick_question": None,
     "show_quick_questions": False,
@@ -632,8 +632,7 @@ default_states = {
     "user_message_count": 0,
     "last_lead_banner_shown": 0,
     "last_error": None,
-    "language": "en",
-    "affiliate_tag": st.secrets.get("AMAZON_TAG", "yourid-20")  # Added for affiliates
+    "affiliate_tag": st.secrets.get("AMAZON_TAG", "yourid-20")
 }
 
 for key, default_value in default_states.items():
@@ -655,15 +654,6 @@ logger.debug(f"🔄 Session state initialized: {len(st.session_state.chat_histor
 st.sidebar.markdown("### 🧸 TedPro Assistant")
 st.sidebar.markdown("Your friendly plushie expert!")
 
-# Language selector
-st.session_state.language = st.sidebar.selectbox(
-    "Language / Idioma",
-    ["English", "Español"],
-    index=0 if st.session_state.language == "en" else 1,
-    key="language_selector"
-)
-st.session_state.language = "en" if st.session_state.language == "English" else "es"
-
 # Analytics
 st.sidebar.markdown("### 📊 Live Analytics")
 col1, col2 = st.sidebar.columns(2)
@@ -677,16 +667,16 @@ with st.sidebar.expander("📈 Detailed Metrics"):
     st.metric("Sales Inquiries", st.session_state.analytics.get("sales_related", 0))
     st.metric("Order Tracking", st.session_state.analytics.get("order_tracking", 0))
     st.metric("Total Sessions", st.session_state.analytics.get("total_sessions", 0))
-    st.metric("Affiliate Clicks", st.session_state.analytics.get("affiliate_clicks", 0))  # Added
+    st.metric("Affiliate Clicks", st.session_state.analytics.get("affiliate_clicks", 0))
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 💌 Get Our Plush Catalog")
-name = st.sidebar.text_input("Your Name / Nombre", key="sidebar_name")
-email = st.sidebar.text_input("Your Email / Correo", key="sidebar_email")
+name = st.sidebar.text_input("Your Name", key="sidebar_name")
+email = st.sidebar.text_input("Your Email", key="sidebar_email")
 
 subscribe_disabled = st.session_state.lead_captured
 if st.sidebar.button(
-    "✅ Already Subscribed! / ¡Ya suscrito!" if subscribe_disabled else "Subscribe & Get Catalog / Suscríbete 🎁",
+    "✅ Already Subscribed!" if subscribe_disabled else "Subscribe & Get Catalog 🎁",
     disabled=subscribe_disabled,
     key="sidebar_subscribe"
 ):
@@ -696,24 +686,24 @@ if st.sidebar.button(
             try:
                 hashed_email = hashlib.sha256(extracted_email.encode()).hexdigest()
                 if hashed_email not in st.session_state.captured_emails:
-                    engine.add_lead(name, extracted_email, context="sidebar_signup")  # Assume engine handles hash if needed
+                    engine.add_lead(name, extracted_email, context="sidebar_signup")
                     st.session_state.captured_emails.add(hashed_email)
                     update_analytics_batch({"lead_captures": 1})
                     st.session_state.lead_captured = True
                     st.session_state.sidebar_name = ""
                     st.session_state.sidebar_email = ""
-                    st.sidebar.success("🎉 You're subscribed! We'll send the catalog soon. / ¡Suscrito! Enviaremos el catálogo pronto.")
+                    st.sidebar.success("🎉 You're subscribed! We'll send the catalog soon.")
                     logger.info(f"📧 Lead captured: {name} <{extracted_email}>")
                     st.rerun()
                 else:
-                    st.sidebar.info("📧 You're already subscribed with this email! / ¡Ya estás suscrito con este correo!")
+                    st.sidebar.info("📧 You're already subscribed with this email!")
             except Exception as e:
                 logger.error(f"Lead capture error: {e}", exc_info=True)
                 st.sidebar.error(f"Failed to save subscription: {e}")
         else:
-            st.sidebar.warning("Please enter a valid email address. / Ingresa un correo válido.")
+            st.sidebar.warning("Please enter a valid email address.")
     else:
-        st.sidebar.warning("Please enter both name and email. / Ingresa nombre y correo.")
+        st.sidebar.warning("Please enter both name and email.")
 
 show_debug_panel()
 
@@ -722,10 +712,10 @@ col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
 with col1:
     st.markdown('<h1 style="color:#FF922B;">TedPro Marketing Assistant 🧸</h1>', unsafe_allow_html=True)
 with col2:
-    if st.button("📜 History / Historial", key="header_history_toggle"):
+    if st.button("📜 History", key="header_history_toggle"):
         st.session_state.show_history = not st.session_state.show_history
 with col3:
-    toggle_label = "❌ Hide / Ocultar" if st.session_state.show_quick_questions else "💡 Quick Q's / Preguntas rápidas"
+    toggle_label = "❌ Hide" if st.session_state.show_quick_questions else "💡 Quick Q's"
     if st.button(toggle_label, key="quick_questions_toggle"):
         st.session_state.show_quick_questions = not st.session_state.show_quick_questions
 with col4:
@@ -734,7 +724,7 @@ with col4:
         unsafe_allow_html=True
     )
 
-st.markdown('<p style="color:#5A3A1B;">Here to help with products, shipping, or special offers! / ¡Aquí para ayudar con productos, envíos u ofertas!</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#5A3A1B;">Here to help with products, shipping, or special offers!</p>', unsafe_allow_html=True)
 
 # Quick Questions
 should_show_quick_questions = (
@@ -743,32 +733,24 @@ should_show_quick_questions = (
 )
 
 if should_show_quick_questions and not st.session_state.processing_active:
-    st.markdown("### 💡 Quick Questions / Preguntas rápidas")
-    quick_questions = {
-        "en": [
-            "What's your pricing?", "Do you ship internationally?", 
-            "Can I customize plushies?", "What's your return policy?", 
-            "How long does shipping take?", "Do you have gift options?", 
-            "What materials are used?", "Can I track my order?",
-            "Do you offer discounts?", "What sizes are available?"
-        ],
-        "es": [
-            "¿Cuál es el precio?", "¿Hacen envíos internacionales?", 
-            "¿Puedo personalizar peluches?", "¿Cuál es la política de devoluciones?", 
-            "¿Cuánto tarda el envío?", "¿Tienen opciones de regalo?", 
-            "¿Qué materiales usan?", "¿Puedo rastrear mi pedido?",
-            "¿Ofrecen descuentos?", "¿Qué tallas están disponibles?"
-        ]
-    }
+    st.markdown("### 💡 Quick Questions")
+    quick_questions = [
+        "What's your pricing?", "Do you ship internationally?", 
+        "Can I customize plushies?", "What's your return policy?", 
+        "How long does shipping take?", "Do you have gift options?", 
+        "What materials are used?", "Can I track my order?",
+        "Do you offer discounts?", "What sizes are available?"
+    ]
+    
     with st.form("quick_questions_form"):
         st.markdown('<div class="quick-questions-form">', unsafe_allow_html=True)
         selected_question = st.radio(
-            "Choose a question: / Elige una pregunta:",
-            quick_questions[st.session_state.language],
+            "Choose a question:",
+            quick_questions,
             key="quick_questions_radio",
             label_visibility="collapsed"
         )
-        submitted = st.form_submit_button("Ask this question / Hacer esta pregunta")
+        submitted = st.form_submit_button("Ask this question")
         st.markdown('</div>', unsafe_allow_html=True)
         if submitted and selected_question:
             st.session_state.selected_quick_question = selected_question
@@ -785,23 +767,14 @@ def should_show_lead_banner() -> bool:
             (user_message_count >= 3 and user_message_count - last_shown >= 3))
 
 if should_show_lead_banner():
-    banner_text = {
-        "en": """
-        <div class='lead-banner'>
-        <h4 style='color:#E65C00;margin:0'>🎁 Special Offer for New Friends!</h4>
-        <p style='margin:8px 0;font-size:15px;color:#5A3A1B;'>Get our <b>free plushie catalog</b> + <b>10% discount</b> on your first order!</p>
-        <p style='margin:0;font-style:italic;color:#8B5A2B'>Just ask about our products or drop your email in the sidebar →</p>
-        </div>
-        """,
-        "es": """
-        <div class='lead-banner'>
-        <h4 style='color:#E65C00;margin:0'>🎁 ¡Oferta especial para nuevos amigos!</h4>
-        <p style='margin:8px 0;font-size:15px;color:#5A3A1B;'>Obtén nuestro <b>catálogo de peluches gratis</b> + <b>10% de descuento</b> en tu primera compra!</p>
-        <p style='margin:0;font-style:italic;color:#8B5A2B'>Solo pregunta sobre nuestros productos o deja tu correo en la barra lateral →</p>
-        </div>
-        """
-    }
-    st.markdown(banner_text[st.session_state.language], unsafe_allow_html=True)
+    banner_text = """
+    <div class='lead-banner'>
+    <h4 style='color:#E65C00;margin:0'>🎁 Special Offer for New Friends!</h4>
+    <p style='margin:8px 0;font-size:15px;color:#5A3A1B;'>Get our <b>free plushie catalog</b> + <b>10% discount</b> on your first order!</p>
+    <p style='margin:0;font-style:italic;color:#8B5A2B'>Just ask about our products or drop your email in the sidebar →</p>
+    </div>
+    """
+    st.markdown(banner_text, unsafe_allow_html=True)
     st.session_state.last_lead_banner_shown = st.session_state.user_message_count
 
 # Chat Display Function
@@ -812,7 +785,7 @@ def display_chat():
     for msg in display_messages:
         if "user" in msg:
             st.markdown(
-                f"<div class='user-msg'><b>You / Tú:</b> {msg['user']}"
+                f"<div class='user-msg'><b>You:</b> {msg['user']}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(msg['timestamp'])}</div></div>",
                 unsafe_allow_html=True
             )
@@ -840,6 +813,7 @@ def process_message(user_input: str):
             analytics_updates["sales_related"] = 1
         if any(k in user_input_lower for k in ["track", "shipping", "delivery"]) and any(c.isdigit() for c in user_input):
             analytics_updates["order_tracking"] = 1
+        
         extracted_email = None
         extracted_name = "Friend"
         if not st.session_state.lead_captured and st.session_state.lead_consent:
@@ -858,7 +832,7 @@ def process_message(user_input: str):
                     st.session_state.last_error = str(e)
         elif "yes" in user_input_lower and not st.session_state.lead_consent:
             st.session_state.lead_consent = True
-            # Proceed to capture if email in previous messages, but for simplicity, prompt again if needed
+
         start_time = time.time()
         try:
             user_messages_before = len([m for m in st.session_state.chat_history if "user" in m])
@@ -866,7 +840,7 @@ def process_message(user_input: str):
             bot_placeholder = st.empty()
             bot_placeholder.markdown("""
             <div class="typing-indicator">
-                Teddy is typing / Teddy está escribiendo
+                Teddy is typing
                 <div class="typing-dots">
                     <div class="typing-dot"></div>
                     <div class="typing-dot"></div>
@@ -874,65 +848,64 @@ def process_message(user_input: str):
                 </div>
             </div>
             """, unsafe_allow_html=True)
+            
             raw_response = ""
-            first_chunk = True
-            friendly_prefix = "Hi there, friend! 🧸 " if is_first and st.session_state.language == "en" else "¡Hola, amigo! 🧸 " if is_first else ""
-            for chunk in engine.stream_answer(user_input, st.session_state.language):  # Assume supports timeout internally
-                if first_chunk:
-                    raw_response += friendly_prefix + chunk
-                    first_chunk = False
-                else:
-                    raw_response += chunk
+            for chunk in engine.stream_answer(user_input):
+                raw_response += chunk
                 bot_placeholder.markdown(
                     f"<div class='bot-msg'><b>TedPro:</b> {raw_response}"
                     f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                     unsafe_allow_html=True
                 )
-            sales_tail = ""
-            if not st.session_state.lead_captured:
-                if any(k in user_input_lower for k in ["gift", "present", "birthday", "anniversary"]):
-                    sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁" if st.session_state.language == "en" else " Si es un regalo, puedo sugerir tallas o añadir una nota dulce. 🎁"
-                elif any(k in user_input_lower for k in ["price", "how much", "cost", "buy"]):
-                    sales_tail = " I can also compare sizes to help you get the best value." if st.session_state.language == "en" else " También puedo comparar tallas para obtener el mejor valor."
-                elif any(k in user_input_lower for k in ["custom", "personalize", "embroidery"]):
-                    sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote." if st.session_state.language == "en" else " Dime tu idea, verificaré la viabilidad, el tiempo y una cotización justa."
+
+            # Apply teddy filter to add personality
+            filtered_response = teddy_filter(user_input, raw_response, is_first, st.session_state.lead_captured)
+
+            # Add consent prompt if needed
             if not st.session_state.lead_consent:
-                sales_tail += " Can I save your email for updates? Reply YES." if st.session_state.language == "en" else " ¿Puedo guardar tu correo para actualizaciones? Responde SÍ."
+                filtered_response += " Can I save your email for updates? Reply YES."
+
             is_purchase_intent = any(k in user_input_lower for k in ["buy", "order", "purchase"])
-            filtered_response = raw_response + sales_tail
+            
             if is_purchase_intent:
                 affiliate_url = f"https://amazon.com/s?k=plushies&tag={st.session_state.affiliate_tag}"
-                filtered_response += f" 💳 {'You can place your order anytime at' if st.session_state.language == 'en' else 'Puedes realizar tu pedido en cualquier momento en'} [Amazon]({affiliate_url})."
+                filtered_response += f" 💳 You can place your order anytime at [Amazon]({affiliate_url})."
+
+            # Update the final display with the filtered response
             bot_placeholder.markdown(
                 f"<div class='bot-msg'><b>TedPro:</b> {filtered_response}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                 unsafe_allow_html=True
             )
+
             if is_purchase_intent:
                 if st.button(
-                    "Shop on Amazon / Comprar en Amazon",
+                    "Shop on Amazon",
                     key=f"affiliate_{uuid.uuid4()}",
                     help="Go to affiliate link"
                 ):
                     update_analytics_batch({"affiliate_clicks": 1})
                     st.markdown(f"<a href='{affiliate_url}' target='_blank'>Redirecting to Amazon...</a>", unsafe_allow_html=True)
                     logger.info("💳 Affiliate click tracked")
+
             if st.button(
-                "Checkout Now / Pagar ahora" if st.session_state.language == "en" else "Pagar ahora",
+                "Checkout Now",
                 key=f"checkout_{uuid.uuid4()}",
-                help="Proceed to mock checkout / Proceder al pago simulado"
+                help="Proceed to mock checkout"
             ):
                 st.markdown(
-                    f"<div class='bot-msg'><b>TedPro:</b> {'Redirecting to secure checkout... (Mock Stripe flow)' if st.session_state.language == 'en' else 'Redirigiendo al pago seguro... (Flujo simulado de Stripe)'}</div>",
+                    f"<div class='bot-msg'><b>TedPro:</b> Redirecting to secure checkout... (Mock Stripe flow)</div>",
                     unsafe_allow_html=True
                 )
                 logger.info("💳 Mock checkout initiated")
+
             bot_message_data = {"bot": filtered_response, "timestamp": datetime.now().isoformat()}
             st.session_state.chat_history.append(bot_message_data)
             append_to_conversation_db("assistant", filtered_response, st.session_state.session_id)
+
             if extracted_email and hashlib.sha256(extracted_email.encode()).hexdigest() in st.session_state.captured_emails:
                 lead_placeholder = st.empty()
-                lead_message = f"📧 Thanks, {extracted_name}! I've added {extracted_email} to our updates list!" if st.session_state.language == "en" else f"📧 ¡Gracias, {extracted_name}! He añadido {extracted_email} a nuestra lista de actualizaciones!"
+                lead_message = f"📧 Thanks, {extracted_name}! I've added {extracted_email} to our updates list!"
                 lead_placeholder.markdown(
                     f"<div class='bot-msg'><b>TedPro:</b> {lead_message}"
                     f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
@@ -941,13 +914,15 @@ def process_message(user_input: str):
                 lead_message_data = {"bot": lead_message, "timestamp": datetime.now().isoformat()}
                 st.session_state.chat_history.append(lead_message_data)
                 append_to_conversation_db("assistant", lead_message, st.session_state.session_id)
+
             processing_time = time.time() - start_time
             logger.info(f"✅ Message processed successfully in {processing_time:.2f}s")
+
         except Exception as e:
             processing_time = time.time() - start_time
             logger.error(f"❌ Message processing error after {processing_time:.2f}s: {str(e)}", exc_info=True)
             st.session_state.last_error = str(e)
-            error_message = f"I'm having a little trouble right now. Please try again soon! 🧸 (Error: {str(e)})" if st.session_state.language == "en" else f"¡Estoy teniendo un pequeño problema ahora! Por favor intenta de nuevo pronto. 🧸 (Error: {str(e)})"
+            error_message = f"I'm having a little trouble right now. Please try again soon! 🧸 (Error: {str(e)})"
             bot_placeholder.markdown(
                 f"<div class='bot-msg'><b>TedPro:</b> {error_message}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
@@ -956,7 +931,9 @@ def process_message(user_input: str):
             error_message_data = {"bot": error_message, "timestamp": datetime.now().isoformat()}
             st.session_state.chat_history.append(error_message_data)
             append_to_conversation_db("assistant", error_message_data["bot"], st.session_state.session_id)
+        
         update_analytics_batch(analytics_updates)
+    
     finally:
         st.session_state.processing_active = False
         logger.debug("🔄 Message processing completed")
@@ -964,37 +941,22 @@ def process_message(user_input: str):
 
 # Main chat rendering
 if st.session_state.show_history:
-    st.subheader("📜 Conversation History / Historial")
+    st.subheader("📜 Conversation History")
     if st.session_state.chat_history:
         display_chat()
     else:
-        st.info("No chat history yet! / ¡Aún no hay historial!")
+        st.info("No chat history yet!")
 else:
     if st.session_state.chat_history:
         display_chat()
     elif not st.session_state.show_quick_questions:
-        st.info("💬 Start a conversation or click 'Quick Q's' for common questions! / ¡Inicia una conversación o haz clic en 'Preguntas rápidas'!")
+        st.info("💬 Start a conversation or click 'Quick Q's' for common questions!")
 
 # Process quick question or user input
 user_input = st.chat_input(
-    "Ask me about plushies, pricing, shipping, or anything else! 🧸 / ¡Pregúntame sobre peluches, precios, envíos o cualquier cosa! 🧸",
+    "Ask me about plushies, pricing, shipping, or anything else! 🧸",
     disabled=st.session_state.processing_active
 )
-
-# Voice input with enhanced error handling
-voice_input = st.audio_input("Or speak your question! / ¡O habla tu pregunta!", key="voice_input")
-if voice_input and not st.session_state.processing_active:
-    try:
-        transcribed_text = engine.transcribe_audio(voice_input)
-        if transcribed_text:
-            user_input = transcribed_text
-            logger.info(f"🎙️ Voice input transcribed: {transcribed_text}")
-        else:
-            logger.warning("🎙️ Voice transcription returned empty result")
-            st.error("Could not transcribe audio. Please try again or type your question.")
-    except Exception as e:
-        logger.error(f"🎙️ Voice transcription error: {e}", exc_info=True)
-        st.error(f"Voice input failed: {str(e)}. Please try again or type your question.")
 
 if st.session_state.selected_quick_question and not st.session_state.processing_active:
     logger.info(f"🎯 Processing quick question: {st.session_state.selected_quick_question}")
