@@ -3,8 +3,6 @@ import os
 import json
 import time
 import requests
-import tempfile
-import openai  # Added for real transcription
 from typing import Generator, Optional
 
 class HybridEngine:
@@ -13,107 +11,67 @@ class HybridEngine:
         self.api_key = api_key
         self.model = model
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.db_path = db_path  # Placeholder for local DB if implemented
-        self.client_id = client_id  # Optional: For tracking per-client usage or sessions
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")  # For Whisper transcription
-        if not self.openai_api_key:
-            self.logger.warning("OPENAI_API_KEY not found - using mock transcription")
+        self.db_path = db_path
+        self.client_id = client_id
         self.logger.info(f"HybridEngine initialized with API key: {bool(api_key)}, model: {model}, client_id: {client_id}")
 
     def search_local_db(self, question: str) -> Optional[str]:
-        # Placeholder: Implement actual DB search if needed (e.g., using SQLite or vector DB)
-        # For now, always return None to fallback to API
+        # Placeholder for local DB search
         self.logger.info("Checking local DB for match...")
         return None
 
-    def transcribe_audio(self, audio_data: bytes, lang: str = "en") -> str:
-        self.logger.info(f"Attempting audio transcription (lang={lang})")
-        if not self.openai_api_key:
-            self.logger.warning("Using mock transcription - OPENAI_API_KEY not set")
-            return "Mock transcribed text from audio input"
-        
-        try:
-            # Save audio to temp file (Streamlit audio_input gives bytes)
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_file.write(audio_data)
-                temp_file_path = temp_file.name
-            
-            # Transcribe with Whisper
-            openai.api_key = self.openai_api_key
-            with open(temp_file_path, "rb") as audio_file:
-                response = openai.Audio.transcribe(
-                    model="whisper-1",
-                    file=audio_file,
-                    language=lang
-                )
-            transcribed_text = response['text']
-            
-            # Clean up temp file
-            os.unlink(temp_file_path)
-            
-            self.logger.info(f"Transcription successful: {transcribed_text[:50]}...")
-            return transcribed_text
-        except Exception as e:
-            self.logger.error(f"Audio transcription error: {str(e)}")
-            return "Error transcribing audio - please try again or type your message."
+    def add_lead(self, name: str, email: str, context: str = "chat"):
+        """Add lead to database - placeholder implementation"""
+        self.logger.info(f"📧 Lead added: {name} <{email}> - Context: {context}")
+        # In a real implementation, this would save to a database
+        return True
 
-    def process_question(self, question: str, stream: bool = True) -> str:
-        local_answer = self.search_local_db(question)
-        if local_answer:
-            return local_answer
-        self.logger.info("No local match, streaming from OpenRouter API...")
-        if stream:
-            return "".join([chunk for chunk in self.stream_answer(question)])
-        else:
-            return self.get_api_answer(question, stream=False)
-
-    def stream_answer(self, question: str, lang: str = "en", *args, **kwargs) -> Generator[str, None, None]:
-        # Added lang param to match main.py call: engine.stream_answer(user_input, st.session_state.language)
-        # Flex args for any extras; now uses lang for prompt if needed (future: multi-lang models)
-        if args or kwargs:
-            self.logger.warning(f"stream_answer received extra args: {args}, kwargs: {kwargs} - ignoring for compatibility")
-        self.logger.info(f"Processing question (stream): '{question}' (lang={lang})")
+    def stream_answer(self, question: str) -> Generator[str, None, None]:
+        """Stream answer from OpenRouter API"""
+        self.logger.info(f"Processing question (stream): '{question}'")
         try:
-            # Enhanced prompt for TedPro persona + language
             system_prompt = (
-                "You are TedPro, a friendly plushie marketing assistant. Respond helpfully about products, shipping, offers. "
-                "Keep responses engaging, short, and fun. Use English only."
-            ) if lang == "en" else (
-                "Eres TedPro, un asistente amigable de peluches. Responde útil sobre productos, envíos, ofertas. "
-                "Mantén respuestas atractivas, cortas y divertidas. Usa solo español."
+                "You are TedPro, a friendly, warm, and enthusiastic plushie marketing assistant for CuddleHeros. "
+                "You have a playful personality and love helping people find the perfect plushie companion. "
+                "Respond in a conversational, friendly tone with occasional emojis. "
+                "Be helpful with product recommendations, shipping info, and custom orders. "
+                "Show genuine excitement about plushies and making people happy. "
+                "Keep responses engaging but concise - imagine you're talking to a friend about cute stuffed animals!"
             )
+            
             for chunk in self.get_api_answer(question, stream=True, system_prompt=system_prompt):
                 yield chunk
         except Exception as e:
             self.logger.error(f"Stream error: {str(e)}")
-            raise
+            yield f"I'm having trouble connecting right now. Please try again! 🧸"
 
-    def get_api_answer(self, question: str, stream: bool = True, system_prompt: Optional[str] = None) -> Generator[str, None, str]:
-        self.logger.info(f"Making OpenRouter API request (stream={stream}, lang=en)...")
+    def get_api_answer(self, question: str, stream: bool = True, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+        """Make API call to OpenRouter"""
+        self.logger.info(f"Making OpenRouter API request (stream={stream})...")
+        
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": question})
+        
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": stream
         }
+        
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": os.getenv("SITE_URL", "http://localhost"),  # Optional: Set your site URL
-            "X-Title": os.getenv("SITE_NAME", "TedPro")  # Optional: Set your app name
+            "HTTP-Referer": os.getenv("SITE_URL", "http://localhost"),
+            "X-Title": os.getenv("SITE_NAME", "TedPro")
         }
-        if self.client_id:
-            headers["X-Client-ID"] = self.client_id  # Optional: Pass client_id if needed for OpenRouter tracking
         
-        start_time = time.time()
+        if self.client_id:
+            headers["X-Client-ID"] = self.client_id
+        
         for attempt in range(3):
             try:
-                self.logger.info(f"Using API key: {self.api_key[:10]}...")
-                self.logger.info(f"Sending request to: {self.api_url}")
-                
                 response = requests.post(
                     self.api_url,
                     headers=headers,
@@ -122,15 +80,12 @@ class HybridEngine:
                     stream=stream
                 )
                 
-                self.logger.info(f"API response status: {response.status_code}")
-                
                 if response.status_code != 200:
                     error_detail = response.text
                     raise ValueError(f"API error {response.status_code}: {error_detail}")
                 
                 if stream:
-                    response_iter = response.iter_lines()
-                    for line in response_iter:
+                    for line in response.iter_lines():
                         if line:
                             decoded_line = line.decode("utf-8")
                             if decoded_line.startswith("data: "):
@@ -147,18 +102,21 @@ class HybridEngine:
                                     continue
                 else:
                     json_response = response.json()
-                    return json_response["choices"][0]["message"]["content"]
+                    yield json_response["choices"][0]["message"]["content"]
                 
                 break  # Success, exit retry loop
                 
             except Exception as e:
-                self.logger.error(f"Unexpected API error: {str(e)}")
+                self.logger.error(f"API error on attempt {attempt + 1}: {str(e)}")
                 if attempt == 2:
                     raise
                 time.sleep(2 ** attempt)  # Exponential backoff
 
-# Example usage (deployment ready - integrate into your main.py)
-# if __name__ == "__main__":
-#     engine = HybridEngine(api_key="your_openrouter_api_key_here", client_id="tedpro_client")
-#     answer_gen = engine.process_question("Hello, who are you?")
-#     print(answer_gen)
+    def answer(self, question: str, lang: str = "en") -> str:
+        """Non-streaming answer for cached responses"""
+        self.logger.info(f"Processing cached question: '{question}'")
+        try:
+            return "".join([chunk for chunk in self.stream_answer(question)])
+        except Exception as e:
+            self.logger.error(f"Answer error: {str(e)}")
+            return "I'm having trouble right now. Please try again! 🧸"
