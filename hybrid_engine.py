@@ -6,24 +6,26 @@ import requests
 from typing import Generator, Optional
 
 class HybridEngine:
-    def __init__(self, api_key: str, model: str = "openai/gpt-3.5-turbo", db_path: Optional[str] = None):
+    def __init__(self, api_key: str, model: str = "openai/gpt-3.5-turbo", db_path: Optional[str] = None, client_id: Optional[str] = None):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.api_key = api_key
         self.model = model
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         self.db_path = db_path  # Placeholder for local DB if implemented
-        self.logger.info(f"HybridEngine initialized with API key: {bool(api_key)}, model: {model}")
+        self.client_id = client_id  # Optional: For tracking per-client usage or sessions
+        self.logger.info(f"HybridEngine initialized with API key: {bool(api_key)}, model: {model}, client_id: {client_id}")
 
     def search_local_db(self, question: str) -> Optional[str]:
         # Placeholder: Implement actual DB search if needed (e.g., using SQLite or vector DB)
         # For now, always return None to fallback to API
-        self.logger.info("Checking local DB for match...")
+        self.logger.info("Checking local DB for match......")
         return None
 
     def transcribe_audio(self, audio_data: bytes, lang: str = "en") -> str:
         self.logger.info(f"Attempting audio transcription (lang={lang})")
         # Placeholder: Integrate Whisper API or local model here
-        self.logger.warning("Using mock transcription - Whisper API not integrated")
+        self.logger.warning("Using mock transcription - Whisper <Whisper API not integrated>")
+>")
         return "Mock transcribed text from audio input"  # Mock response
 
     def process_question(self, question: str, stream: bool = True) -> str:
@@ -42,7 +44,7 @@ class HybridEngine:
             for chunk in self.get_api_answer(question, stream=True):
                 yield chunk
         except Exception as e:
-            self.logger.error(f"Stream error after {time.time() - start_time:.2f}s: {str(e)}" if 'start_time' in locals() else str(e))
+            self.logger.error(f"Stream error: {str(e)}")
             raise
 
     def get_api_answer(self, question: str, stream: bool = True) -> Generator[str, None, str]:
@@ -58,6 +60,8 @@ class HybridEngine:
             "HTTP-Referer": os.getenv("SITE_URL", "http://localhost"),  # Optional: Set your site URL
             "X-Title": os.getenv("SITE_NAME", "TedPro")  # Optional: Set your app name
         }
+        if self.client_id:
+            headers["X-Client-ID"] = self.client_id  # Optional: Pass client_id if needed for OpenRouter tracking
         
         start_time = time.time()
         for attempt in range(3):
@@ -73,7 +77,6 @@ class HybridEngine:
                     stream=stream
                 )
                 
-                # Fixed typo: status_code instead of status_cde
                 self.logger.info(f"API response status: {response.status_code}")
                 
                 if response.status_code != 200:
@@ -111,6 +114,6 @@ class HybridEngine:
 
 # Example usage (deployment ready - integrate into your main.py)
 # if __name__ == "__main__":
-#     engine = HybridEngine(api_key="your_openrouter_api_key_here")
+#     engine = HybridEngine(api_key="your_openrouter_api_key_here", client_id="6a63fa70-434c-47eb-b395-afd93a53240c")
 #     answer_gen = engine.process_question("Hello, who are you?")
 #     print(answer_gen)
