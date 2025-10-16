@@ -5,6 +5,8 @@ import time
 import requests
 from typing import Generator, Optional
 
+SHEETY_URL = "https://api.sheety.co/cc387df4d9ab1c8e8407fe07b3406457/tedProSubscribers/sheet1"
+
 class HybridEngine:
     def __init__(self, api_key: str, model: str = "openai/gpt-3.5-turbo", db_path: Optional[str] = None, client_id: Optional[str] = None):
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -16,31 +18,46 @@ class HybridEngine:
         self.logger.info(f"HybridEngine initialized with API key: {bool(api_key)}, model: {model}, client_id: {client_id}")
 
     def search_local_db(self, question: str) -> Optional[str]:
-        # Placeholder for local DB search
+        # Placeholder for local DB search (not used anymore)
         self.logger.info("Checking local DB for match...")
         return None
 
     def add_lead(self, name: str, email: str, context: str = "chat"):
-        """Add lead to database - placeholder implementation"""
-        self.logger.info(f"📧 Lead added: {name} <{email}> - Context: {context}")
-        # In a real implementation, this would save to a database
-        return True
+        """Add lead to Sheety Google Sheet"""
+        payload = {
+            "sheet1": {
+                "Name": name,
+                "Email": email,
+                "Context": context
+            }
+        }
+        try:
+            response = requests.post(SHEETY_URL, json=payload)
+            if response.status_code in (200, 201):
+                self.logger.info(f"📧 Lead added to Sheety: {name} <{email}>")
+                return True
+            else:
+                self.logger.error(f"Failed to add lead to Sheety: {response.status_code} {response.text}")
+                return False
+        except Exception as e:
+            self.logger.error(f"Error adding lead to Sheety: {str(e)}")
+            return False
 
     def stream_answer(self, question: str) -> Generator[str, None, None]:
         """Stream answer from OpenRouter API"""
         self.logger.info(f"Processing question (stream): '{question}'")
         try:
             system_prompt = (
-    "You are TedPro, a friendly, warm, and enthusiastic plushie marketing assistant for CuddleHeros. "
-    "You have a playful personality and love helping people find the perfect plushie companion. "
-    "Respond in a conversational, friendly tone with occasional emojis. "
-    "Be helpful with product recommendations, shipping info, and custom orders. "
-    "Show genuine excitement about plushies and making people happy. "
-    "Keep responses engaging but concise - imagine you're talking to a friend about cute stuffed animals! "
-    "Important: Only greet the user once per session. "
-    "Do NOT start every message with 'Hey there', 'Hi', or similar greetings after the first response. "
-    "If the user already greeted you, skip the greeting and continue the conversation naturally."
-)
+                "You are TedPro, a friendly, warm, and enthusiastic plushie marketing assistant for CuddleHeros. "
+                "You have a playful personality and love helping people find the perfect plushie companion. "
+                "Respond in a conversational, friendly tone with occasional emojis. "
+                "Be helpful with product recommendations, shipping info, and custom orders. "
+                "Show genuine excitement about plushies and making people happy. "
+                "Keep responses engaging but concise - imagine you're talking to a friend about cute stuffed animals! "
+                "Important: Only greet the user once per session. "
+                "Do NOT start every message with 'Hey there', 'Hi', or similar greetings after the first response. "
+                "If the user already greeted you, skip the greeting and continue the conversation naturally."
+            )
             
             for chunk in self.get_api_answer(question, stream=True, system_prompt=system_prompt):
                 yield chunk
@@ -123,4 +140,3 @@ class HybridEngine:
         except Exception as e:
             self.logger.error(f"Answer error: {str(e)}")
             return "I'm having trouble right now. Please try again! 🧸"
-
