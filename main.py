@@ -201,21 +201,34 @@ def cached_engine_answer(_engine: HybridEngine, question: str) -> str:
         logger.error(f"❌ Engine error after {processing_time:.2f}s: {str(e)}", exc_info=True)
         return f"I'm having trouble right now. Please try again! 🧸 (Error: {str(e)})"
 
-def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captured: bool) -> str:
-    logger.debug(f"🎭 Applying teddy filter - Lead captured: {lead_captured}, has_greeted: {st.session_state.get('has_greeted', False)}")
-    
-    friendly_prefix = "Hi there, friend! 🧸 " if not st.session_state.get("has_greeted", False) else ""
-    
+def teddy_filter(user_message: str, raw_answer: str, is_first_user_message: bool, lead_captured: bool) -> (str, bool):
+    """
+    Apply teddy personality rules.
+    Returns tuple: (filtered_response, greeting_was_added_bool)
+    - greeting only added when this is the true first user message AND hasn't greeted before.
+    """
+    logger.debug(f"🎭 Applying teddy filter - Lead captured: {lead_captured}, has_greeted: {st.session_state.get('has_greeted', False)}, is_first_user_message: {is_first_user_message}")
+
+    # Only add greeting when this is the first user message in the session and we haven't greeted yet.
+    greeting_added = False
+    if is_first_user_message and not st.session_state.get("has_greeted", False):
+        friendly_prefix = "Hi there, friend! 🧸 "
+        greeting_added = True
+    else:
+        friendly_prefix = ""
+
     sales_tail = ""
     if not lead_captured:
-        if any(k in user_message.lower() for k in ["gift", "present", "birthday", "anniversary"]):
+        um = user_message.lower()
+        if any(k in um for k in ["gift", "present", "birthday", "anniversary"]):
             sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁"
-        elif any(k in user_message.lower() for k in ["price", "how much", "cost", "buy"]):
+        elif any(k in um for k in ["price", "how much", "cost", "buy"]):
             sales_tail = " I can also compare sizes to help you get the best value."
-        elif any(k in user_message.lower() for k in ["custom", "personalize", "embroidery"]):
+        elif any(k in um for k in ["custom", "personalize", "embroidery"]):
             sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote."
 
-    return f"{friendly_prefix}{raw_answer}{sales_tail}"
+    filtered = f"{friendly_prefix}{raw_answer}{sales_tail}"
+    return filtered, greeting_added
 
 # Analytics with Batch Support
 _analytics_lock = threading.Lock()
@@ -1002,6 +1015,7 @@ st.markdown("""
 <small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - Complete Version | Upgrade to SaaS Pro Contact us!</small>
 </center>
 """, unsafe_allow_html=True)
+
 
 
 
