@@ -639,6 +639,7 @@ default_states = {
     "show_history": False,
     "lead_captured": False,
     "lead_consent": False,
+    "consent_prompt_shown": False,
     "captured_emails": set(),
     "selected_quick_question": None,
     "show_quick_questions": False,
@@ -1027,6 +1028,7 @@ st.markdown("""
 <small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - Complete Version | Upgrade to SaaS Pro Contact us!</small>
 </center>
 """, unsafe_allow_html=True)
+
 
 
 
