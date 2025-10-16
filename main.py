@@ -202,13 +202,10 @@ def cached_engine_answer(_engine: HybridEngine, question: str) -> str:
         return f"I'm having trouble right now. Please try again! 🧸 (Error: {str(e)})"
 
 def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captured: bool) -> str:
-    logger.debug(f"🎭 Applying teddy filter - First: {is_first}, Lead captured: {lead_captured}, has_greeted: {st.session_state.get('has_greeted', False)}")
+    logger.debug(f"🎭 Applying teddy filter - Lead captured: {lead_captured}, has_greeted: {st.session_state.get('has_greeted', False)}")
     
     friendly_prefix = "Hi there, friend! 🧸 " if not st.session_state.get("has_greeted", False) else ""
-    if not st.session_state.get("has_greeted", False):
-        st.session_state.has_greeted = True
-        logger.debug("👋 First-time greeting added to response")
-
+    
     sales_tail = ""
     if not lead_captured:
         if any(k in user_message.lower() for k in ["gift", "present", "birthday", "anniversary"]):
@@ -868,6 +865,12 @@ def process_message(user_input: str):
 
             # Apply teddy filter to add personality
             filtered_response = teddy_filter(user_input, raw_response, is_first, st.session_state.lead_captured)
+            
+            # Set has_greeted to True after the first response
+            if user_messages_before == 0 and not st.session_state.get("has_greeted", False):
+                st.session_state.has_greeted = True
+                logger.debug("👋 Set has_greeted to True after first response")
+
             logger.debug(f"After teddy_filter - has_greeted: {st.session_state.get('has_greeted', False)}, response: {filtered_response[:50]}...")
 
             # Add consent prompt if needed
@@ -999,5 +1002,6 @@ st.markdown("""
 <small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - Complete Version | Upgrade to SaaS Pro Contact us!</small>
 </center>
 """, unsafe_allow_html=True)
+
 
 
