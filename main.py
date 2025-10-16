@@ -203,7 +203,14 @@ def cached_engine_answer(_engine: HybridEngine, question: str) -> str:
 
 def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captured: bool) -> str:
     logger.debug(f"🎭 Applying teddy filter - First: {is_first}, Lead captured: {lead_captured}")
-    friendly_prefix = "Hi there, friend! 🧸 " if is_first else ""
+    
+    # Only show greeting if it's the first message AND we haven't greeted yet in this session
+    friendly_prefix = ""
+    if is_first and not st.session_state.get("has_greeted", False):
+        friendly_prefix = "Hi there, friend! 🧸 "
+        st.session_state.has_greeted = True
+        logger.debug("👋 First-time greeting added to response")
+    
     sales_tail = ""
     if not lead_captured:
         if any(k in user_message.lower() for k in ["gift", "present", "birthday", "anniversary"]):
@@ -212,6 +219,7 @@ def teddy_filter(user_message: str, raw_answer: str, is_first: bool, lead_captur
             sales_tail = " I can also compare sizes to help you get the best value."
         elif any(k in user_message.lower() for k in ["custom", "personalize", "embroidery"]):
             sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote."
+    
     return f"{friendly_prefix}{raw_answer}{sales_tail}"
 
 # Analytics with Batch Support
@@ -632,7 +640,8 @@ default_states = {
     "user_message_count": 0,
     "last_lead_banner_shown": 0,
     "last_error": None,
-    "affiliate_tag": st.secrets.get("AMAZON_TAG", "yourid-20")
+    "affiliate_tag": st.secrets.get("AMAZON_TAG", "yourid-20"),
+    "has_greeted": False,
 }
 
 for key, default_value in default_states.items():
@@ -985,8 +994,9 @@ st.markdown("""
 <br>
 <hr>
 <center>
-<small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by Tash & Hendrik 🧸</small>
+<small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by The Cuddleheros Team 🧸</small>
 <br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - Complete Version | Upgrade to SaaS Pro for $19/mo - Contact us!</small>
+<small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - Complete Version | Upgrade to SaaS Pro Contact us!</small>
 </center>
 """, unsafe_allow_html=True)
+
