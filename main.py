@@ -823,6 +823,7 @@ def process_message(user_input: str):
     st.session_state.last_processed_time = current_time
     logger.info(f"🔄 Processing message: '{user_input}'")
     try:
+        # increment message counter for analytics
         st.session_state.user_message_count += 1
         analytics_updates = {"total_messages": 1}
         user_input_lower = user_input.lower()
@@ -830,31 +831,50 @@ def process_message(user_input: str):
             analytics_updates["sales_related"] = 1
         if any(k in user_input_lower for k in ["track", "shipping", "delivery"]) and any(c.isdigit() for c in user_input):
             analytics_updates["order_tracking"] = 1
-        
+
+        # ---- Consent handling: if user just said "yes" to consent, acknowledge and prompt for email
+        if "yes" in user_input_lower and not st.session_state.lead_consent:
+            st.session_state.lead_consent = True
+            ack_msg = "Thanks — I can save updates for you. Could you share your email now?"
+            st.session_state.chat_history.append({"bot": ack_msg, "timestamp": datetime.now().isoformat()})
+            append_to_conversation_db("assistant", ack_msg, st.session_state.session_id)
+            # don't continue into full engine call for this one — it's a prompt expecting an email next
+            st.session_state.processing_active = False
+            st.rerun()
+            return
+
+        # Prepare for lead capture extraction (but do not force)
         extracted_email = None
         extracted_name = "Friend"
         if not st.session_state.lead_captured and st.session_state.lead_consent:
-            extracted_email = extract_email(user_input)
-            if extracted_email and hashlib.sha256(extracted_email.encode()).hexdigest() not in st.session_state.captured_emails:
-                extracted_name = extract_name(user_input)
-                hashed_email = hashlib.sha256(extracted_email.encode()).hexdigest()
-                try:
-                    engine.add_lead(extracted_name, extracted_email, context="chat_auto_capture")
-                    analytics_updates["lead_captures"] = 1
-                    st.session_state.captured_emails.add(hashed_email)
-                    st.session_state.lead_captured = True
-                    logger.info(f"📧 Auto-captured lead: {extracted_name} <{extracted_email}>")
-                except Exception as e:
-                    logger.error(f"Lead capture error: {e}", exc_info=True)
-                    st.session_state.last_error = str(e)
-        elif "yes" in user_input_lower and not st.session_state.lead_consent:
-            st.session_state.lead_consent = True
+            maybe_email = extract_email(user_input)
+            if maybe_email:
+                hashed_email = hashlib.sha256(maybe_email.encode()).hexdigest()
+                if hashed_email not in st.session_state.captured_emails:
+                    # attempt to persist lead
+                    try:
+                        engine.add_lead(extract_name(user_input), maybe_email, context="chat_auto_capture")
+                        st.session_state.captured_emails.add(hashed_email)
+                        st.session_state.lead_captured = True
+                        analytics_updates["lead_captures"] = 1
+                        extracted_email = maybe_email
+                        extracted_name = extract_name(user_input)
+                        logger.info(f"📧 Auto-captured lead: {extracted_name} <{extracted_email}>")
+                        # Immediately thank the user and add that bot message to history & DB
+                        thank_you = f"📧 Thanks, {extracted_name}! I've added {extracted_email} to our updates list!"
+                        st.session_state.chat_history.append({"bot": thank_you, "timestamp": datetime.now().isoformat()})
+                        append_to_conversation_db("assistant", thank_you, st.session_state.session_id)
+                    except Exception as e:
+                        logger.error(f"Lead capture error: {e}", exc_info=True)
+                        st.session_state.last_error = str(e)
 
         start_time = time.time()
         try:
-            user_messages_before = len([m for m in st.session_state.chat_history if "user" in m])
-            is_first = user_messages_before == 1
-            logger.debug(f"Processing message - is_first: {is_first}, has_greeted: {st.session_state.get('has_greeted', False)}")
+            # Determine whether this is the first user message in the session (exclude current user message in history)
+            prior_user_messages = len([m for m in st.session_state.chat_history[:-1] if "user" in m])
+            is_first_user_message = (prior_user_messages == 0)
+
+            logger.debug(f"Processing message - is_first_user_message: {is_first_user_message}, has_greeted: {st.session_state.get('has_greeted', False)}")
             bot_placeholder = st.empty()
             bot_placeholder.markdown("""
             <div class="typing-indicator">
@@ -866,7 +886,7 @@ def process_message(user_input: str):
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            
+
             raw_response = ""
             for chunk in engine.stream_answer(user_input):
                 raw_response += chunk
@@ -876,33 +896,33 @@ def process_message(user_input: str):
                     unsafe_allow_html=True
                 )
 
-            # Apply teddy filter to add personality
-            filtered_response = teddy_filter(user_input, raw_response, is_first, st.session_state.lead_captured)
-            
-            # Set has_greeted to True after the first response
-            if user_messages_before == 0 and not st.session_state.get("has_greeted", False):
+            # Apply teddy filter -> now returns (filtered_response, greeting_added)
+            filtered_response, greeting_added = teddy_filter(user_input, raw_response, is_first_user_message, st.session_state.lead_captured)
+
+            # If greeting was actually added, set has_greeted so future messages do not get greetings
+            if greeting_added:
                 st.session_state.has_greeted = True
-                logger.debug("👋 Set has_greeted to True after first response")
+                logger.debug("👋 Greeting was added and has_greeted set to True")
 
-            logger.debug(f"After teddy_filter - has_greeted: {st.session_state.get('has_greeted', False)}, response: {filtered_response[:50]}...")
-
-            # Add consent prompt if needed
-            if not st.session_state.lead_consent:
+            # Consent prompt should be shown only once per session (avoid repeated prompts)
+            if not st.session_state.lead_consent and not st.session_state.get("consent_prompt_shown", False):
                 filtered_response += " Can I save your email for updates? Reply YES."
+                st.session_state.consent_prompt_shown = True
 
+            # If purchase intent, append affiliate link
             is_purchase_intent = any(k in user_input_lower for k in ["buy", "order", "purchase"])
-            
             if is_purchase_intent:
                 affiliate_url = f"https://amazon.com/s?k=plushies&tag={st.session_state.affiliate_tag}"
                 filtered_response += f" 💳 You can place your order anytime at [Amazon]({affiliate_url})."
 
-            # Update the final display with the filtered response
+            # Update final display with filtered response
             bot_placeholder.markdown(
                 f"<div class='bot-msg'><b>TedPro:</b> {filtered_response}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                 unsafe_allow_html=True
             )
 
+            # show affiliate / checkout buttons as before
             if is_purchase_intent:
                 if st.button(
                     "Shop on Amazon",
@@ -924,21 +944,13 @@ def process_message(user_input: str):
                 )
                 logger.info("💳 Mock checkout initiated")
 
+            # Save bot response to session history & DB
             bot_message_data = {"bot": filtered_response, "timestamp": datetime.now().isoformat()}
             st.session_state.chat_history.append(bot_message_data)
             append_to_conversation_db("assistant", filtered_response, st.session_state.session_id)
 
-            if extracted_email and hashlib.sha256(extracted_email.encode()).hexdigest() in st.session_state.captured_emails:
-                lead_placeholder = st.empty()
-                lead_message = f"📧 Thanks, {extracted_name}! I've added {extracted_email} to our updates list!"
-                lead_placeholder.markdown(
-                    f"<div class='bot-msg'><b>TedPro:</b> {lead_message}"
-                    f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
-                    unsafe_allow_html=True
-                )
-                lead_message_data = {"bot": lead_message, "timestamp": datetime.now().isoformat()}
-                st.session_state.chat_history.append(lead_message_data)
-                append_to_conversation_db("assistant", lead_message, st.session_state.session_id)
+            # If we captured an email earlier in this run (extracted_email), we already appended the thank-you above.
+            # But if extracted_email exists and you still want a visible inline acknowledgement placeholder, it's already done.
 
             processing_time = time.time() - start_time
             logger.info(f"✅ Message processed successfully in {processing_time:.2f}s")
@@ -1015,6 +1027,7 @@ st.markdown("""
 <small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - Complete Version | Upgrade to SaaS Pro Contact us!</small>
 </center>
 """, unsafe_allow_html=True)
+
 
 
 
