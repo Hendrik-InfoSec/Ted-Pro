@@ -2,17 +2,18 @@ import streamlit as st
 from hybrid_engine import HybridEngine
 from datetime import datetime
 from pathlib import Path
-import json, os, re, time, uuid, threading, logging
+import json, os, re, time, uuid, logging
 from typing import List, Dict, Optional
-import sqlite3, hashlib, traceback
+import hashlib, traceback
 from rich.logging import RichHandler
 from rich.traceback import install as install_rich_traceback
 import pandas as pd
+from supabase import create_client, Client
 
 # Install rich traceback for better error formatting
 install_rich_traceback()
 
-# Setup & Configuration - Streamlit Cloud Compatible
+# Setup & Configuration
 st.set_page_config(
     page_title="TedPro Marketing Assistant 🧸",
     page_icon="🧸",
@@ -25,7 +26,7 @@ st.set_page_config(
     }
 )
 
-# Configure logging with rich - Streamlit Cloud compatible
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -34,139 +35,41 @@ logging.basicConfig(
 logger = logging.getLogger("TedPro")
 client_id = "tedpro_client"
 
-# Database Setup with Connection Pooling
-def get_db_connection():
-    """Get SQLite connection with pooling and timeout"""
-    db_path = Path(os.getenv("DB_PATH", "/tmp")) / f"{client_id}_chat_data.db"
-    if db_path.parent == Path("/tmp"):
-        st.warning("DB in /tmp—data may reset on redeploy. Use external DB for prod.")
-    for attempt in range(3):
-        try:
-            conn = sqlite3.connect(db_path, timeout=10)
-            return conn
-        except sqlite3.OperationalError as e:
-            logger.warning(f"DB connection attempt {attempt+1} failed: {e}")
-            time.sleep(0.5)
-    raise sqlite3.OperationalError("Failed to connect to database after retries")
-
-def init_database():
-    """Initialize SQLite database for better performance"""
-    logger.info("Initializing database...")
+# Supabase Connection
+@st.cache_resource
+def get_supabase_client() -> Client:
+    """Get cached Supabase client"""
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    session_id TEXT NOT NULL
-                )
-            ''')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_session_timestamp ON conversations (session_id, timestamp)')
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS analytics (
-                    key TEXT PRIMARY KEY,
-                    value INTEGER DEFAULT 0,
-                    updated_at TEXT NOT NULL
-                )
-            ''')
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS leads (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    hashed_email TEXT UNIQUE NOT NULL,
-                    context TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    consent TEXT
-                )
-            ''')
-            conn.commit()
-        logger.info("✅ Database initialized successfully")
+        supabase_url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
+        supabase_key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
+        
+        if not supabase_url or not supabase_key:
+            raise ValueError("Supabase credentials not found!")
+        
+        client = create_client(supabase_url, supabase_key)
+        logger.info("✅ Supabase client created")
+        return client
     except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
+        logger.error(f"❌ Supabase client creation failed: {e}")
         raise
-
-def append_to_conversation_db(role: str, content: str, session_id: str):
-    """Append message to database"""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO conversations (role, content, timestamp, session_id)
-                VALUES (?, ?, ?, ?)
-            ''', (role, content, datetime.now().isoformat(), session_id))
-            cursor.execute('''
-                DELETE FROM conversations 
-                WHERE id NOT IN (
-                    SELECT id FROM conversations 
-                    WHERE session_id = ? 
-                    ORDER BY timestamp DESC 
-                    LIMIT 1000
-                )
-            ''', (session_id,))
-            conn.commit()
-        logger.debug(f"📝 Saved message to DB: {role} - {content[:50]}...")
-    except Exception as e:
-        logger.error(f"Database error: {e}", exc_info=True)
-
-def load_recent_conversation_db(session_id: str, limit: int = 50) -> List[Dict]:
-    """Load recent conversation from database"""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT role, content, timestamp 
-                FROM conversations 
-                WHERE session_id = ? 
-                ORDER BY timestamp DESC 
-                LIMIT ?
-            ''', (session_id, limit))
-            messages = cursor.fetchall()
-        return [{"role": msg[0], "content": msg[1], "timestamp": msg[2]} for msg in reversed(messages)]
-    except Exception as e:
-        logger.error(f"Database load error: {e}", exc_info=True)
-        return []
-
-def get_leads_df() -> pd.DataFrame:
-    """Get leads as pandas DataFrame for export"""
-    try:
-        with get_db_connection() as conn:
-            df = pd.read_sql_query("SELECT name, hashed_email, context, timestamp, consent FROM leads", conn)
-        return df
-    except Exception as e:
-        logger.error(f"Lead export error: {e}", exc_info=True)
-        return pd.DataFrame(columns=["name", "hashed_email", "context", "timestamp", "consent"])
-
-def get_analytics_df() -> pd.DataFrame:
-    """Get analytics as pandas DataFrame for export"""
-    try:
-        with get_db_connection() as conn:
-            df = pd.read_sql_query("SELECT key, value, updated_at FROM analytics", conn)
-        return df
-    except Exception as e:
-        logger.error(f"Analytics export error: {e}", exc_info=True)
-        return pd.DataFrame(columns=["key", "value", "updated_at"])
 
 # Core Functions
 def get_key(name: str) -> Optional[str]:
-    """Get API key with detailed logging"""
-    env_value = os.getenv(name)
-    secret_value = st.secrets.get(name)
-    logger.debug(f"🔑 Key lookup - {name}:")
-    logger.debug(f"  Environment: {'✅ Found' if env_value else '❌ Not found'}")
-    logger.debug(f"  Secrets: {'✅ Found' if secret_value else '❌ Not found'}")
-    return secret_value or env_value
+    """Get API key with fallback"""
+    return st.secrets.get(name, os.getenv(name))
 
 def extract_email(text: str) -> Optional[str]:
-    """Robust email validation using fullmatch"""
+    """Robust email validation"""
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    match = re.fullmatch(email_pattern, text.strip())
-    return match.group(0) if match else None
+    words = text.split()
+    for word in words:
+        match = re.fullmatch(email_pattern, word.strip())
+        if match:
+            return match.group(0)
+    return None
 
 def extract_name(text: str) -> str:
-    """Simple name extraction - look for capitalized words that aren't email"""
+    """Simple name extraction"""
     words = text.split()
     for word in words:
         if (word.istitle() and len(word) > 1 and 
@@ -185,55 +88,72 @@ def format_timestamp(timestamp_str: str) -> str:
     except (ValueError, TypeError):
         return datetime.now().strftime("%H:%M")
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def cached_engine_answer(_engine: HybridEngine, question: str) -> str:
-    logger.info(f"🔍 Engine processing question: '{question}'")
-    start_time = time.time()
+# Database Operations
+def append_to_conversation(role: str, content: str, session_id: str):
+    """Append message to Supabase"""
     try:
-        normalized = question.lower().strip()
-        logger.debug(f"📤 Sending to engine: '{normalized}'")
-        response = _engine.answer(normalized, "en")
-        processing_time = time.time() - start_time
-        logger.info(f"✅ Engine response received in {processing_time:.2f}s: '{response[:100]}...'")
-        return response
+        supabase = get_supabase_client()
+        supabase.table('conversations').insert({
+            'role': role,
+            'content': content,
+            'timestamp': datetime.now().isoformat(),
+            'session_id': session_id,
+            'client_id': client_id
+        }).execute()
+        logger.debug(f"📝 Saved message: {role} - {content[:50]}...")
     except Exception as e:
-        processing_time = time.time() - start_time
-        logger.error(f"❌ Engine error after {processing_time:.2f}s: {str(e)}", exc_info=True)
-        return f"I'm having trouble right now. Please try again! 🧸 (Error: {str(e)})"
+        logger.error(f"Database save error: {e}", exc_info=True)
 
-def teddy_filter(user_message: str, raw_answer: str, is_first_user_message: bool, lead_captured: bool) -> (str, bool):
-    """
-    Apply teddy personality rules.
-    Returns tuple: (filtered_response, greeting_was_added_bool)
-    - greeting only added when this is the true first user message AND hasn't greeted before.
-    """
-    logger.debug(f"🎭 Applying teddy filter - Lead captured: {lead_captured}, has_greeted: {st.session_state.get('has_greeted', False)}, is_first_user_message: {is_first_user_message}")
+def load_recent_conversation(session_id: str, limit: int = 50) -> List[Dict]:
+    """Load recent conversation from Supabase"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table('conversations').select(
+            'role, content, timestamp'
+        ).eq(
+            'session_id', session_id
+        ).order(
+            'timestamp', desc=True
+        ).limit(limit).execute()
+        
+        messages = result.data if result.data else []
+        return [{"role": msg['role'], "content": msg['content'], 
+                 "timestamp": msg['timestamp']} for msg in reversed(messages)]
+    except Exception as e:
+        logger.error(f"Database load error: {e}", exc_info=True)
+        return []
 
-    # Only add greeting when this is the first user message in the session and we haven't greeted yet.
-    greeting_added = False
-    if is_first_user_message and not st.session_state.get("has_greeted", False):
-        friendly_prefix = "Hi there, friend! 🧸 "
-        greeting_added = True
-    else:
-        friendly_prefix = ""
+def get_leads_df() -> pd.DataFrame:
+    """Get leads as DataFrame"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table('leads').select(
+            'name, email, context, timestamp, consent'
+        ).eq('client_id', client_id).execute()
+        
+        if result.data:
+            return pd.DataFrame(result.data)
+        return pd.DataFrame(columns=["name", "email", "context", "timestamp", "consent"])
+    except Exception as e:
+        logger.error(f"Lead export error: {e}", exc_info=True)
+        return pd.DataFrame(columns=["name", "email", "context", "timestamp", "consent"])
 
-    sales_tail = ""
-    if not lead_captured:
-        um = user_message.lower()
-        if any(k in um for k in ["gift", "present", "birthday", "anniversary"]):
-            sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁"
-        elif any(k in um for k in ["price", "how much", "cost", "buy"]):
-            sales_tail = " I can also compare sizes to help you get the best value."
-        elif any(k in um for k in ["custom", "personalize", "embroidery"]):
-            sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote."
+def get_analytics_df() -> pd.DataFrame:
+    """Get analytics as DataFrame"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table('analytics').select(
+            'key, value, updated_at'
+        ).eq('client_id', client_id).execute()
+        
+        if result.data:
+            return pd.DataFrame(result.data)
+        return pd.DataFrame(columns=["key", "value", "updated_at"])
+    except Exception as e:
+        logger.error(f"Analytics export error: {e}", exc_info=True)
+        return pd.DataFrame(columns=["key", "value", "updated_at"])
 
-    filtered = f"{friendly_prefix}{raw_answer}{sales_tail}"
-    return filtered, greeting_added
-
-# Analytics with Batch Support
-_analytics_lock = threading.Lock()
-_analytics_batch: Dict[str, int] = {}
-
+# Analytics Functions
 def get_analytics() -> Dict[str, int]:
     """Get analytics from database"""
     default = {
@@ -242,54 +162,110 @@ def get_analytics() -> Dict[str, int]:
         "affiliate_clicks": 0
     }
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT key, value FROM analytics')
-            results = cursor.fetchall()
-        db_analytics = {row[0]: row[1] for row in results}
-        return {**default, **db_analytics}
+        supabase = get_supabase_client()
+        result = supabase.table('analytics').select(
+            'key, value'
+        ).eq('client_id', client_id).execute()
+        
+        if result.data:
+            db_analytics = {row['key']: row['value'] for row in result.data}
+            return {**default, **db_analytics}
+        return default
     except Exception as e:
         logger.error(f"Analytics load error: {e}", exc_info=True)
         return default
 
-def update_analytics_batch(updates: Dict[str, int], immediate: bool = False):
-    """Batch update analytics with optional immediate flush"""
-    global _analytics_batch
+def update_analytics(updates: Dict[str, int]):
+    """Update analytics immediately"""
     try:
-        with _analytics_lock:
+        supabase = get_supabase_client()
+        
+        for key, increment in updates.items():
+            # Check if key exists
+            existing = supabase.table('analytics').select('value').eq(
+                'key', key
+            ).eq('client_id', client_id).execute()
+            
+            if existing.data and len(existing.data) > 0:
+                # Update existing
+                new_value = existing.data[0]['value'] + increment
+                supabase.table('analytics').update({
+                    'value': new_value,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('key', key).eq('client_id', client_id).execute()
+            else:
+                # Insert new
+                supabase.table('analytics').insert({
+                    'key': key,
+                    'value': increment,
+                    'updated_at': datetime.now().isoformat(),
+                    'client_id': client_id
+                }).execute()
+        
+        # Update session state
+        if "analytics" in st.session_state:
             for key, increment in updates.items():
-                _analytics_batch[key] = _analytics_batch.get(key, 0) + increment
-            if immediate or sum(_analytics_batch.values()) >= 10:
-                if _analytics_batch:
-                    with get_db_connection() as conn:
-                        cursor = conn.cursor()
-                        for key, increment in _analytics_batch.items():
-                            cursor.execute('''
-                                INSERT INTO analytics (key, value, updated_at) 
-                                VALUES (?, ?, ?)
-                                ON CONFLICT(key) DO UPDATE SET 
-                                value = value + excluded.value,
-                                updated_at = excluded.updated_at
-                            ''', (key, increment, datetime.now().isoformat()))
-                        conn.commit()
-                    if "analytics" in st.session_state:
-                        current = st.session_state.analytics
-                        for key, increment in _analytics_batch.items():
-                            current[key] = current.get(key, 0) + increment
-                        st.session_state.analytics = current
-                    logger.debug(f"📊 Analytics updated: {_analytics_batch}")
-                    _analytics_batch = {}
+                st.session_state.analytics[key] = st.session_state.analytics.get(key, 0) + increment
+        
+        logger.info(f"📊 Analytics updated: {updates}")
+        return True
     except Exception as e:
         logger.error(f"Analytics update error: {e}", exc_info=True)
+        return False
+
+# Email Notifications
+def send_lead_notification(lead_name: str, lead_email: str, context: str) -> bool:
+    """Send email notification for new lead"""
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        
+        sender_email = get_key("NOTIFICATION_EMAIL")
+        sender_password = get_key("NOTIFICATION_PASSWORD")
+        recipient_email = get_key("BUSINESS_EMAIL") or sender_email
+        
+        if not sender_password:
+            logger.warning("No email password configured - skipping notification")
+            return False
+        
+        message = MIMEMultipart()
+        message["From"] = sender_email
+        message["To"] = recipient_email
+        message["Subject"] = f"🎉 New Lead: {lead_name}"
+        
+        body = f"""
+New lead captured via TedPro!
+
+Name: {lead_name}
+Email: {lead_email}
+Source: {context}
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Login to your dashboard to see full details.
+        """
+        
+        message.attach(MIMEText(body, "plain"))
+        
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender_email, sender_password)
+            server.send_message(message)
+        
+        logger.info(f"✉️ Lead notification sent to {recipient_email}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Email notification error: {e}", exc_info=True)
+        return False
 
 # Admin Dashboard
 def render_admin_dashboard():
-    """Render admin dashboard with leads and analytics export"""
+    """Render admin dashboard"""
     st.header("🧸 TedPro Admin Dashboard")
     st.markdown("Manage leads and analytics for CuddleHeros")
     
     # Leads section
-    st.subheader("Leads")
+    st.subheader("📧 Leads")
     leads_df = get_leads_df()
     if not leads_df.empty:
         leads_df['est_value'] = leads_df['context'].apply(lambda x: 5 if 'sidebar' in x else 2)
@@ -306,7 +282,7 @@ def render_admin_dashboard():
         st.info("No leads captured yet.")
     
     # Analytics section
-    st.subheader("Analytics")
+    st.subheader("📊 Analytics")
     analytics_df = get_analytics_df()
     if not analytics_df.empty:
         st.dataframe(analytics_df, use_container_width=True)
@@ -322,83 +298,111 @@ def render_admin_dashboard():
 
 # Debug Panel
 def show_debug_panel():
-    """Show debug information in sidebar"""
+    """Show debug information"""
     with st.sidebar.expander("🔧 Debug Panel", expanded=False):
-        st.write("**API Status:**")
+        st.write("**Status:**")
+        
+        # API Key
         api_key = get_key("OPENROUTER_API_KEY")
         if api_key:
-            masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
-            st.success(f"✅ API Key: {masked_key}")
+            masked = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+            st.success(f"✅ API Key: {masked}")
         else:
             st.error("❌ API Key: MISSING")
+        
+        # Supabase
+        try:
+            supabase = get_supabase_client()
+            st.success("✅ Supabase: Connected")
+        except:
+            st.error("❌ Supabase: Not connected")
+        
+        # Engine
         if 'engine' in st.session_state:
             st.success("✅ Engine: Initialized")
         else:
             st.error("❌ Engine: Not initialized")
-        try:
-            db_path = Path("/tmp") / f"{client_id}_chat_data.db"
-            if db_path.exists():
-                st.success("✅ Database: Connected")
-            else:
-                st.warning("⚠️ Database: Not created yet")
-        except:
-            st.error("❌ Database: Error")
-        st.write("**Session Info:**")
-        st.write(f"Session ID: {st.session_state.get('session_id', 'None')}")
+        
+        st.write("**Session:**")
+        st.write(f"ID: {st.session_state.get('session_id', 'None')[:8]}...")
         st.write(f"Messages: {len(st.session_state.get('chat_history', []))}")
+        
         if st.button("🔄 Clear Cache"):
             st.cache_data.clear()
+            st.cache_resource.clear()
             st.rerun()
 
-# Engine Initialization
+# Teddy Personality Filter
+def teddy_filter(user_message: str, raw_answer: str, is_first_message: bool, lead_captured: bool) -> tuple:
+    """Apply teddy personality with proper greeting logic"""
+    greeting_added = False
+    
+    # Only add greeting on first message if we haven't greeted yet
+    if is_first_message and not st.session_state.get("has_greeted", False):
+        friendly_prefix = "Hi there, friend! 🧸 "
+        greeting_added = True
+    else:
+        friendly_prefix = ""
+    
+    # Add contextual sales prompts
+    sales_tail = ""
+    if not lead_captured:
+        um = user_message.lower()
+        if any(k in um for k in ["gift", "present", "birthday", "anniversary"]):
+            sales_tail = " If this is a gift, I can suggest sizes or add a sweet note. 🎁"
+        elif any(k in um for k in ["price", "how much", "cost", "buy"]):
+            sales_tail = " I can also compare sizes to help you get the best value."
+        elif any(k in um for k in ["custom", "personalize", "embroidery"]):
+            sales_tail = " Tell me your idea—I'll check feasibility, timeline, and a fair quote."
+    
+    filtered = f"{friendly_prefix}{raw_answer}{sales_tail}"
+    return filtered, greeting_added
+
+# Initialize Engine
 logger.info("🚀 Starting TedPro initialization...")
 
 api_key = get_key("OPENROUTER_API_KEY")
 if not api_key:
-    logger.error("❌ CRITICAL: OPENROUTER_API_KEY not found!")
     st.error("""
     🔑 **API Key Missing!**
     
-    **To fix this:**
+    Add to Streamlit Secrets:
+    - `OPENROUTER_API_KEY = "your-key-here"`
     
-    1. **Get API key** from [OpenRouter](https://openrouter.ai/keys)
-    2. **Add to Streamlit Secrets:**
-       - Go to app settings → Secrets
-       - Add: `OPENROUTER_API_KEY = "your-key-here"`
-    3. **Redeploy** the app
+    Get one at: https://openrouter.ai/keys
+    """)
+    st.stop()
+
+supabase_url = get_key("SUPABASE_URL")
+supabase_key = get_key("SUPABASE_KEY")
+
+if not supabase_url or not supabase_key:
+    st.error("""
+    🗄️ **Supabase Credentials Missing!**
+    
+    Add to Streamlit Secrets:
+    - `SUPABASE_URL = "https://xxx.supabase.co"`
+    - `SUPABASE_KEY = "your-anon-key"`
+    
+    Get these from: https://supabase.com → Project Settings → API
     """)
     st.stop()
 
 try:
-    init_database()
-    logger.info("✅ Database initialized")
-except Exception as e:
-    logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
-    st.error(f"Database error: {e}")
-    st.stop()
-
-try:
-    logger.info("🔄 Initializing HybridEngine...")
-    start_time = time.time()
     if 'engine' not in st.session_state:
-        engine = HybridEngine(api_key=api_key, client_id=client_id)
+        engine = HybridEngine(
+            api_key=api_key,
+            supabase_url=supabase_url,
+            supabase_key=supabase_key,
+            client_id=client_id
+        )
         st.session_state.engine = engine
     else:
         engine = st.session_state.engine
-    init_time = time.time() - start_time
-    logger.info(f"✅ HybridEngine initialized successfully in {init_time:.2f}s")
+    logger.info("✅ Engine initialized")
 except Exception as e:
-    logger.error(f"❌ Engine initialization failed: {str(e)}", exc_info=True)
-    st.error(f"""
-    ❌ **Engine Initialization Failed!**
-    
-    **Error:** {str(e)}
-    
-    **Check:**
-    1. Is your OpenRouter API key valid?
-    2. Does your account have credits?
-    3. Check the logs for more details
-    """)
+    logger.error(f"❌ Engine initialization failed: {e}", exc_info=True)
+    st.error(f"Engine initialization failed: {e}")
     st.stop()
 
 # Multi-Page Setup
@@ -411,228 +415,37 @@ if page != "Chat":
     pages[page]()
     st.stop()
 
-# UI Styling - Enhanced Performance with Orange Theme
+# UI Styling
 st.markdown("""
 <style>
-body { 
-    background: linear-gradient(180deg, #FFD5A5, #FFEDD2); 
-    font-family: 'Arial', sans-serif; 
-}
-.user-msg { 
-    background-color: #FFE1B3; 
-    border-radius:10px; 
-    padding:10px; 
-    margin-bottom:8px; 
-    border:1px solid #FFC085; 
-    word-wrap: break-word;
-    color: #2D1B00;
-}
-.bot-msg { 
-    background-color: #FFF9F4; 
-    border-left:5px solid #FFA94D; 
-    border-radius:10px; 
-    padding:10px; 
-    margin-bottom:8px; 
-    border:1px solid #FFE4CC; 
-    word-wrap: break-word;
-    color: #2D1B00;
-}
-.conversation-scroll { 
-    max-height:400px; 
-    overflow-y:auto; 
-    padding:10px; 
-    border:1px solid #FFE4CC; 
-    border-radius:10px; 
-    background-color:#FFFCF9; 
-    scroll-behavior:smooth; 
-    position: relative;
-    transition: all 0.3s ease;
-}
-.quick-questions-form {
-    border: 1px solid #FFD7A5;
-    border-radius: 10px;
-    padding: 15px;
-    background: #FFF9F4;
-    margin: 15px 0;
-}
-.quick-question-btn { 
-    background-color:#FFEDD5; 
-    border:1px solid #FFD7A5; 
-    border-radius:8px; 
-    padding:10px 6px; 
-    cursor:pointer; 
-    text-align:center; 
-    transition: all 0.3s; 
-    font-size:13px; 
-    width:100%;
-    border: none;
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #2D1B00;
-    margin: 4px 0;
-}
-.quick-question-btn:hover { 
-    background-color:#FFE1B3; 
-    transform: translateY(-2px); 
-    box-shadow: 0 4px 8px rgba(255, 165, 0, 0.2);
-}
-.quick-question-btn:disabled {
-    background-color: #f0f0f0;
-    color: #a0a0a0;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
-}
-.analytics-badge {
-    background: linear-gradient(135deg, #FFA94D, #FF922B);
-    color: white;
-    padding: 4px 8px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: bold;
-}
-.typing-indicator {
-    display: flex;
-    align-items: center;
-    padding: 12px 16px;
-    background: #FFF9F4;
-    border-left: 5px solid #FFA94D;
-    border-radius: 10px;
-    margin-bottom: 8px;
-    border: 1px solid #FFE4CC;
-    font-style: italic;
-    color: #5A3A1B;
-    animation: fadeIn 0.3s ease-in;
-}
-.typing-dots {
-    display: inline-flex;
-    margin-left: 8px;
-}
-.typing-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background-color: #FF922B;
-    margin: 0 2px;
-    animation: typingAnimation 1.4s infinite ease-in-out;
-}
+body { background: linear-gradient(180deg, #FFD5A5, #FFEDD2); font-family: 'Arial', sans-serif; }
+.user-msg { background-color: #FFE1B3; border-radius:10px; padding:10px; margin-bottom:8px; 
+    border:1px solid #FFC085; word-wrap: break-word; color: #2D1B00; }
+.bot-msg { background-color: #FFF9F4; border-left:5px solid #FFA94D; border-radius:10px; 
+    padding:10px; margin-bottom:8px; border:1px solid #FFE4CC; word-wrap: break-word; color: #2D1B00; }
+.conversation-scroll { max-height:400px; overflow-y:auto; padding:10px; border:1px solid #FFE4CC; 
+    border-radius:10px; background-color:#FFFCF9; scroll-behavior:smooth; }
+.typing-indicator { display: flex; align-items: center; padding: 12px 16px; background: #FFF9F4;
+    border-left: 5px solid #FFA94D; border-radius: 10px; margin-bottom: 8px; border: 1px solid #FFE4CC;
+    font-style: italic; color: #5A3A1B; animation: fadeIn 0.3s ease-in; }
+.typing-dots { display: inline-flex; margin-left: 8px; }
+.typing-dot { width: 6px; height: 6px; border-radius: 50%; background-color: #FF922B; margin: 0 2px;
+    animation: typingAnimation 1.4s infinite ease-in-out; }
 .typing-dot:nth-child(1) { animation-delay: -0.32s; }
 .typing-dot:nth-child(2) { animation-delay: -0.16s; }
-.typing-dot:nth-child(3) { animation-delay: 0s; }
-@keyframes typingAnimation {
-    0%, 80%, 100% { 
-        transform: scale(0.8);
-        opacity: 0.5;
-    }
-    40% { 
-        transform: scale(1);
-        opacity: 1;
-    }
-}
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(5px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.quick-questions-toggle {
-    background: linear-gradient(135deg, #FFD8A5, #FFC085);
-    border: 1px solid #FFB366;
-    border-radius: 20px;
-    padding: 6px 16px;
-    font-size: 12px;
-    color: #5A3A1B;
-    cursor: pointer;
-    transition: all 0.3s;
-    margin: 10px 0;
-}
-.quick-questions-toggle:hover {
-    background: linear-gradient(135deg, #FFC085, #FFA94D);
-    transform: translateY(-1px);
-}
-.lead-banner {
-    background: linear-gradient(135deg,#FFE8D6,#FFD8B5);
-    padding:20px;
-    border-radius:12px;
-    margin:15px 0;
-    text-align:center;
-    border:2px dashed #FFA94D;
-    animation: pulse 2s infinite;
-}
-@keyframes pulse {
-    0% { border-color: #FFA94D; }
-    50% { border-color: #FF922B; }
-    100% { border-color: #FFA94D; }
-}
-.checkout-btn {
-    background: linear-gradient(135deg, #FF922B, #FFA94D);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    padding: 10px;
-    cursor: pointer;
-    transition: all 0.3s;
-    font-size: 14px;
-    margin-top: 10px;
-}
-.checkout-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(255, 165, 0, 0.2);
-}
-.debug-panel {
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 5px;
-    padding: 10px;
-    margin: 10px 0;
-    font-family: monospace;
-    font-size: 12px;
-}
-@media (max-width: 768px) {
-    .quick-questions-grid {
-        grid-template-columns: 1fr;
-        gap: 6px;
-    }
-    .conversation-scroll {
-        max-height: 350px;
-        padding: 8px;
-    }
-    .user-msg, .bot-msg {
-        padding: 8px;
-        font-size: 14px;
-    }
-}
+@keyframes typingAnimation { 0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; } 40% { transform: scale(1); opacity: 1; } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+.lead-banner { background: linear-gradient(135deg,#FFE8D6,#FFD8B5); padding:20px; border-radius:12px;
+    margin:15px 0; text-align:center; border:2px dashed #FFA94D; animation: pulse 2s infinite; }
+@keyframes pulse { 0% { border-color: #FFA94D; } 50% { border-color: #FF922B; } 100% { border-color: #FFA94D; } }
 </style>
-
-<script>
-function scrollToBottom() {
-    const scrollContainer = document.querySelector('.conversation-scroll');
-    if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-        setTimeout(() => {
-            scrollContainer.scrollTop = scrollContainer.scrollHeight;
-        }, 150);
-    }
-}
-
-const observer = new MutationObserver(scrollToBottom);
-window.addEventListener('load', () => {
-    const scrollContainer = document.querySelector('.conversation-scroll');
-    if (scrollContainer) {
-        observer.observe(scrollContainer, { childList: true, subtree: true });
-    }
-    scrollToBottom();
-});
-
-setInterval(scrollToBottom, 400);
-</script>
 """, unsafe_allow_html=True)
 
 # Session State Initialization
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
-    update_analytics_batch({"total_sessions": 1}, immediate=True)
-    logger.info(f"🆕 New session started: {st.session_state.session_id}")
+    update_analytics({"total_sessions": 1})
+    logger.info(f"🆕 New session: {st.session_state.session_id}")
 
 default_states = {
     "chat_history": [],
@@ -649,14 +462,14 @@ default_states = {
     "user_message_count": 0,
     "last_lead_banner_shown": 0,
     "last_error": None,
-    "affiliate_tag": st.secrets.get("AMAZON_TAG", "yourid-20"),
+    "affiliate_tag": get_key("AMAZON_TAG") or "yourid-20",
     "has_greeted": False,
 }
 
 for key, default_value in default_states.items():
     if key not in st.session_state:
         if key == "chat_history":
-            recent_messages = load_recent_conversation_db(st.session_state.session_id, 50)
+            recent_messages = load_recent_conversation(st.session_state.session_id, 50)
             st.session_state.chat_history = []
             for msg in recent_messages:
                 if msg["role"] == "user":
@@ -666,18 +479,16 @@ for key, default_value in default_states.items():
         else:
             st.session_state[key] = default_value
 
-logger.debug(f"🔄 Session state initialized: {len(st.session_state.chat_history)} messages in history")
-
 # Sidebar
 st.sidebar.markdown("### 🧸 TedPro Assistant")
 st.sidebar.markdown("Your friendly plushie expert!")
 
-# Analytics
+# Analytics Display
 st.sidebar.markdown("### 📊 Live Analytics")
 col1, col2 = st.sidebar.columns(2)
 with col1:
     st.metric("Messages", st.session_state.analytics.get("total_messages", 0))
-with col2: 
+with col2:
     st.metric("Leads", st.session_state.analytics.get("lead_captures", 0))
 
 with st.sidebar.expander("📈 Detailed Metrics"):
@@ -688,6 +499,8 @@ with st.sidebar.expander("📈 Detailed Metrics"):
     st.metric("Affiliate Clicks", st.session_state.analytics.get("affiliate_clicks", 0))
 
 st.sidebar.markdown("---")
+
+# Lead Capture Sidebar
 st.sidebar.markdown("### 💌 Get Our Plush Catalog")
 name = st.sidebar.text_input("Your Name", key="sidebar_name")
 email = st.sidebar.text_input("Your Email", key="sidebar_email")
@@ -706,27 +519,26 @@ if st.sidebar.button(
                 if hashed_email not in st.session_state.captured_emails:
                     engine.add_lead(name, extracted_email, context="sidebar_signup")
                     st.session_state.captured_emails.add(hashed_email)
-                    update_analytics_batch({"lead_captures": 1})
+                    update_analytics({"lead_captures": 1})
                     st.session_state.lead_captured = True
-                    st.session_state.sidebar_name = ""
-                    st.session_state.sidebar_email = ""
                     st.sidebar.success("🎉 You're subscribed! We'll send the catalog soon.")
+                    send_lead_notification(name, extracted_email, "sidebar_signup")
                     logger.info(f"📧 Lead captured: {name} <{extracted_email}>")
                     st.rerun()
                 else:
-                    st.sidebar.info("📧 You're already subscribed with this email!")
+                    st.sidebar.info("📧 You're already subscribed!")
             except Exception as e:
                 logger.error(f"Lead capture error: {e}", exc_info=True)
-                st.sidebar.error(f"Failed to save subscription: {e}")
+                st.sidebar.error(f"Failed to save: {e}")
         else:
-            st.sidebar.warning("Please enter a valid email address.")
+            st.sidebar.warning("Please enter a valid email.")
     else:
         st.sidebar.warning("Please enter both name and email.")
 
 show_debug_panel()
 
 # Main Chat Interface
-col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
     st.markdown('<h1 style="color:#FF922B;">TedPro Marketing Assistant 🧸</h1>', unsafe_allow_html=True)
 with col2:
@@ -736,11 +548,6 @@ with col3:
     toggle_label = "❌ Hide" if st.session_state.show_quick_questions else "💡 Quick Q's"
     if st.button(toggle_label, key="quick_questions_toggle"):
         st.session_state.show_quick_questions = not st.session_state.show_quick_questions
-with col4:
-    st.markdown(
-        f'<div class="analytics-badge">🆕 {st.session_state.analytics.get("total_sessions", 0)}</div>',
-        unsafe_allow_html=True
-    )
 
 st.markdown('<p style="color:#5A3A1B;">Here to help with products, shipping, or special offers!</p>', unsafe_allow_html=True)
 
@@ -761,7 +568,6 @@ if should_show_quick_questions and not st.session_state.processing_active:
     ]
     
     with st.form("quick_questions_form"):
-        st.markdown('<div class="quick-questions-form">', unsafe_allow_html=True)
         selected_question = st.radio(
             "Choose a question:",
             quick_questions,
@@ -769,35 +575,30 @@ if should_show_quick_questions and not st.session_state.processing_active:
             label_visibility="collapsed"
         )
         submitted = st.form_submit_button("Ask this question")
-        st.markdown('</div>', unsafe_allow_html=True)
         if submitted and selected_question:
             st.session_state.selected_quick_question = selected_question
-            logger.info(f"🎯 Quick question selected: {selected_question}")
+            logger.info(f"🎯 Quick question: {selected_question}")
 
 # Lead Banner
 def should_show_lead_banner() -> bool:
-    """Determine if lead banner should be shown"""
     if st.session_state.lead_captured:
         return False
-    user_message_count = st.session_state.user_message_count
+    user_count = st.session_state.user_message_count
     last_shown = st.session_state.last_lead_banner_shown
-    return (user_message_count == 0 or 
-            (user_message_count >= 3 and user_message_count - last_shown >= 3))
+    return (user_count == 0 or (user_count >= 3 and user_count - last_shown >= 3))
 
 if should_show_lead_banner():
-    banner_text = """
+    st.markdown("""
     <div class='lead-banner'>
     <h4 style='color:#E65C00;margin:0'>🎁 Special Offer for New Friends!</h4>
-    <p style='margin:8px 0;font-size:15px;color:#5A3A1B;'>Get our <b>free plushie catalog</b> + <b>10% discount</b> on your first order!</p>
+    <p style='margin:8px 0;font-size:15px;color:#5A3A1B;'>Get our <b>free plushie catalog</b> + <b>10% discount</b>!</p>
     <p style='margin:0;font-style:italic;color:#8B5A2B'>Just ask about our products or drop your email in the sidebar →</p>
     </div>
-    """
-    st.markdown(banner_text, unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
     st.session_state.last_lead_banner_shown = st.session_state.user_message_count
 
-# Chat Display Function
+# Chat Display
 def display_chat():
-    """Display chat messages"""
     st.markdown('<div class="conversation-scroll">', unsafe_allow_html=True)
     display_messages = st.session_state.chat_history[-20:]
     for msg in display_messages:
@@ -817,65 +618,58 @@ def display_chat():
 
 # Message Processing
 def process_message(user_input: str):
-    """Optimized message processing with streaming and enhanced features"""
+    """Process user message"""
     current_time = time.time()
     if current_time - st.session_state.last_processed_time < 0.5:
         return
     st.session_state.last_processed_time = current_time
-    logger.info(f"🔄 Processing message: '{user_input}'")
+    
+    logger.info(f"🔄 Processing: '{user_input}'")
+    
     try:
-        # increment message counter for analytics
         st.session_state.user_message_count += 1
         analytics_updates = {"total_messages": 1}
+        
         user_input_lower = user_input.lower()
         if any(k in user_input_lower for k in ["price", "buy", "order", "cost", "purchase"]):
             analytics_updates["sales_related"] = 1
         if any(k in user_input_lower for k in ["track", "shipping", "delivery"]) and any(c.isdigit() for c in user_input):
             analytics_updates["order_tracking"] = 1
-
-        # ---- Consent handling: if user just said "yes" to consent, acknowledge and prompt for email
+        
+        # Consent handling
         if "yes" in user_input_lower and not st.session_state.lead_consent:
             st.session_state.lead_consent = True
-            ack_msg = "Thanks — I can save updates for you. Could you share your email now?"
+            ack_msg = "Thanks! Could you share your email now?"
             st.session_state.chat_history.append({"bot": ack_msg, "timestamp": datetime.now().isoformat()})
-            append_to_conversation_db("assistant", ack_msg, st.session_state.session_id)
-            # don't continue into full engine call for this one — it's a prompt expecting an email next
+            append_to_conversation("assistant", ack_msg, st.session_state.session_id)
             st.session_state.processing_active = False
             st.rerun()
             return
-
-        # Prepare for lead capture extraction (but do not force)
-        extracted_email = None
-        extracted_name = "Friend"
+        
+        # Lead capture
         if not st.session_state.lead_captured and st.session_state.lead_consent:
             maybe_email = extract_email(user_input)
             if maybe_email:
-                hashed_email = hashlib.sha256(maybe_email.encode()).hexdigest()
-                if hashed_email not in st.session_state.captured_emails:
-                    # attempt to persist lead
+                hashed = hashlib.sha256(maybe_email.encode()).hexdigest()
+                if hashed not in st.session_state.captured_emails:
                     try:
-                        engine.add_lead(extract_name(user_input), maybe_email, context="chat_auto_capture")
-                        st.session_state.captured_emails.add(hashed_email)
+                        engine.add_lead(extract_name(user_input), maybe_email, "chat_auto_capture")
+                        st.session_state.captured_emails.add(hashed)
                         st.session_state.lead_captured = True
                         analytics_updates["lead_captures"] = 1
-                        extracted_email = maybe_email
-                        extracted_name = extract_name(user_input)
-                        logger.info(f"📧 Auto-captured lead: {extracted_name} <{extracted_email}>")
-                        # Immediately thank the user and add that bot message to history & DB
-                        thank_you = f"📧 Thanks, {extracted_name}! I've added {extracted_email} to our updates list!"
+                        send_lead_notification(extract_name(user_input), maybe_email, "chat_auto_capture")
+                        thank_you = f"📧 Thanks! I've added {maybe_email} to our updates list!"
                         st.session_state.chat_history.append({"bot": thank_you, "timestamp": datetime.now().isoformat()})
-                        append_to_conversation_db("assistant", thank_you, st.session_state.session_id)
+                        append_to_conversation("assistant", thank_you, st.session_state.session_id)
                     except Exception as e:
                         logger.error(f"Lead capture error: {e}", exc_info=True)
-                        st.session_state.last_error = str(e)
-
+        
+        # Get bot response
         start_time = time.time()
         try:
-            # Determine whether this is the first user message in the session (exclude current user message in history)
             prior_user_messages = len([m for m in st.session_state.chat_history[:-1] if "user" in m])
-            is_first_user_message = (prior_user_messages == 0)
-
-            logger.debug(f"Processing message - is_first_user_message: {is_first_user_message}, has_greeted: {st.session_state.get('has_greeted', False)}")
+            is_first_message = (prior_user_messages == 0)
+            
             bot_placeholder = st.empty()
             bot_placeholder.markdown("""
             <div class="typing-indicator">
@@ -887,7 +681,7 @@ def process_message(user_input: str):
                 </div>
             </div>
             """, unsafe_allow_html=True)
-
+            
             raw_response = ""
             for chunk in engine.stream_answer(user_input):
                 raw_response += chunk
@@ -896,88 +690,64 @@ def process_message(user_input: str):
                     f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                     unsafe_allow_html=True
                 )
-
-            # Apply teddy filter -> now returns (filtered_response, greeting_added)
-            filtered_response, greeting_added = teddy_filter(user_input, raw_response, is_first_user_message, st.session_state.lead_captured)
-
-            # If greeting was actually added, set has_greeted so future messages do not get greetings
+            
+            # Apply teddy filter
+            filtered_response, greeting_added = teddy_filter(user_input, raw_response, is_first_message, st.session_state.lead_captured)
+            
             if greeting_added:
                 st.session_state.has_greeted = True
-                logger.debug("👋 Greeting was added and has_greeted set to True")
-
-            # Consent prompt should be shown only once per session (avoid repeated prompts)
+            
+            # Add consent prompt if needed
             if not st.session_state.lead_consent and not st.session_state.get("consent_prompt_shown", False):
                 filtered_response += " Can I save your email for updates? Reply YES."
                 st.session_state.consent_prompt_shown = True
-
-            # If purchase intent, append affiliate link
+            
+            # Add affiliate link for purchase intent
             is_purchase_intent = any(k in user_input_lower for k in ["buy", "order", "purchase"])
             if is_purchase_intent:
                 affiliate_url = f"https://amazon.com/s?k=plushies&tag={st.session_state.affiliate_tag}"
-                filtered_response += f" 💳 You can place your order anytime at [Amazon]({affiliate_url})."
-
-            # Update final display with filtered response
+                filtered_response += f" 💳 You can order at [Amazon]({affiliate_url})."
+            
+            # Update display
             bot_placeholder.markdown(
                 f"<div class='bot-msg'><b>TedPro:</b> {filtered_response}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                 unsafe_allow_html=True
             )
-
-            # show affiliate / checkout buttons as before
+            
+            # Add affiliate button
             if is_purchase_intent:
-                if st.button(
-                    "Shop on Amazon",
-                    key=f"affiliate_{uuid.uuid4()}",
-                    help="Go to affiliate link"
-                ):
-                    update_analytics_batch({"affiliate_clicks": 1})
-                    st.markdown(f"<a href='{affiliate_url}' target='_blank'>Redirecting to Amazon...</a>", unsafe_allow_html=True)
-                    logger.info("💳 Affiliate click tracked")
-
-            if st.button(
-                "Checkout Now",
-                key=f"checkout_{uuid.uuid4()}",
-                help="Proceed to mock checkout"
-            ):
-                st.markdown(
-                    f"<div class='bot-msg'><b>TedPro:</b> Redirecting to secure checkout... (Mock Stripe flow)</div>",
-                    unsafe_allow_html=True
-                )
-                logger.info("💳 Mock checkout initiated")
-
-            # Save bot response to session history & DB
+                if st.button("Shop on Amazon", key=f"affiliate_{uuid.uuid4()}"):
+                    update_analytics({"affiliate_clicks": 1})
+                    st.markdown(f"<a href='{affiliate_url}' target='_blank'>Redirecting...</a>", unsafe_allow_html=True)
+            
+            # Save bot response
             bot_message_data = {"bot": filtered_response, "timestamp": datetime.now().isoformat()}
             st.session_state.chat_history.append(bot_message_data)
-            append_to_conversation_db("assistant", filtered_response, st.session_state.session_id)
-
-            # If we captured an email earlier in this run (extracted_email), we already appended the thank-you above.
-            # But if extracted_email exists and you still want a visible inline acknowledgement placeholder, it's already done.
-
+            append_to_conversation("assistant", filtered_response, st.session_state.session_id)
+            
             processing_time = time.time() - start_time
-            logger.info(f"✅ Message processed successfully in {processing_time:.2f}s")
-
+            logger.info(f"✅ Processed in {processing_time:.2f}s")
+            
         except Exception as e:
             processing_time = time.time() - start_time
-            logger.error(f"❌ Message processing error after {processing_time:.2f}s: {str(e)}", exc_info=True)
-            st.session_state.last_error = str(e)
-            error_message = f"I'm having a little trouble right now. Please try again soon! 🧸 (Error: {str(e)})"
+            logger.error(f"❌ Error after {processing_time:.2f}s: {e}", exc_info=True)
+            error_message = f"I'm having trouble right now. Please try again! 🧸"
             bot_placeholder.markdown(
                 f"<div class='bot-msg'><b>TedPro:</b> {error_message}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                 unsafe_allow_html=True
             )
-            error_message_data = {"bot": error_message, "timestamp": datetime.now().isoformat()}
-            st.session_state.chat_history.append(error_message_data)
-            append_to_conversation_db("assistant", error_message_data["bot"], st.session_state.session_id)
+            st.session_state.chat_history.append({"bot": error_message, "timestamp": datetime.now().isoformat()})
+            append_to_conversation("assistant", error_message, st.session_state.session_id)
         
-        update_analytics_batch(analytics_updates)
+        update_analytics(analytics_updates)
     
     finally:
         st.session_state.processing_active = False
-        logger.debug("🔄 Message processing completed")
         st.rerun()
-        
-# Main chat rendering
+
+# Main Chat Rendering
 if st.session_state.show_history:
     st.subheader("📜 Conversation History")
     if st.session_state.chat_history:
@@ -990,47 +760,33 @@ else:
     elif not st.session_state.show_quick_questions:
         st.info("💬 Start a conversation or click 'Quick Q's' for common questions!")
 
-# Process quick question or user input
+# Process Input
 user_input = st.chat_input(
     "Ask me about plushies, pricing, shipping, or anything else! 🧸",
     disabled=st.session_state.processing_active
 )
 
 if st.session_state.selected_quick_question and not st.session_state.processing_active:
-    logger.info(f"🎯 Processing quick question: {st.session_state.selected_quick_question}")
     user_input = st.session_state.selected_quick_question
     st.session_state.selected_quick_question = None
 
 if user_input and not st.session_state.processing_active:
     logger.info(f"💬 Input received: {user_input}")
     st.session_state.processing_active = True
-    append_to_conversation_db("user", user_input, st.session_state.session_id)
+    append_to_conversation("user", user_input, st.session_state.session_id)
     st.session_state.chat_history.append({"user": user_input, "timestamp": datetime.now().isoformat()})
     st.rerun()
 
-if (
-    st.session_state.chat_history
-    and "user" in st.session_state.chat_history[-1]
-    and st.session_state.processing_active
-):
+if (st.session_state.chat_history and 
+    "user" in st.session_state.chat_history[-1] and 
+    st.session_state.processing_active):
     process_message(st.session_state.chat_history[-1]["user"])
-
-# Flush analytics
-update_analytics_batch({}, immediate=True)
 
 # Footer
 st.markdown("""
-<br>
-<hr>
+<br><hr>
 <center>
-<small style="color: #5A3A1B;">© 2025 TedPro Pro Chatbot by The Cuddleheros Team 🧸</small>
-<br>
-<small style="color: #FFA94D;">Professional Plushie Assistant v3.1 - Complete Version | Upgrade to SaaS Pro Contact us!</small>
+<small style="color: #5A3A1B;">© 2025 TedPro by CuddleHeros Team 🧸</small><br>
+<small style="color: #FFA94D;">Professional Assistant v3.2 - PostgreSQL Edition</small>
 </center>
 """, unsafe_allow_html=True)
-
-
-
-
-
-
