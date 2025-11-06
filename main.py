@@ -494,19 +494,30 @@ except Exception as e:
     st.stop()
 
 # Multi-Page Setup with Hidden Admin
-query_params = st.query_params
-show_admin_option = query_params.get("admin") == "true"
+# Check if admin mode is enabled via URL parameter
+try:
+    query_params = st.query_params
+    show_admin_option = "admin" in query_params and query_params["admin"] == "true"
+except:
+    show_admin_option = False
 
+# Only show admin page if ?admin=true is in URL
 if show_admin_option:
     pages = {
         "Chat": lambda: None,
         "Admin Dashboard": render_admin_dashboard
     }
+    logger.info("🔓 Admin mode enabled via URL parameter")
 else:
     # Regular users only see Chat
     pages = {"Chat": lambda: None}
+    logger.info("👤 Regular user mode - admin hidden")
 
-page = st.sidebar.selectbox("Select Page", list(pages.keys()), key="page_selector")
+# Only show page selector if there's more than one page
+if len(pages) > 1:
+    page = st.sidebar.selectbox("Select Page", list(pages.keys()), key="page_selector")
+else:
+    page = "Chat"
 
 if page != "Chat":
     pages[page]()
