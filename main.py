@@ -258,10 +258,65 @@ Login to your dashboard to see full details.
         logger.error(f"Email notification error: {e}", exc_info=True)
         return False
 
+# Admin Authentication
+def check_admin_auth() -> bool:
+    """Check if user is authenticated as admin"""
+    if 'admin_authenticated' not in st.session_state:
+        st.session_state.admin_authenticated = False
+    
+    if not st.session_state.admin_authenticated:
+        st.markdown("### 🔐 Admin Access Required")
+        st.info("Admin dashboard requires authentication")
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            password = st.text_input(
+                "Enter admin password:",
+                type="password",
+                key="admin_password_input",
+                help="Get password from app admin"
+            )
+        
+        with col2:
+            st.write("")  # Spacing
+            st.write("")  # Spacing
+            login_btn = st.button("🔓 Login", use_container_width=True)
+        
+        if login_btn:
+            correct_password = get_key("ADMIN_PASSWORD") or "tedpro2025"
+            
+            if password == correct_password:
+                st.session_state.admin_authenticated = True
+                st.success("✅ Access granted! Redirecting...")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("❌ Incorrect password")
+                logger.warning(f"Failed admin login attempt")
+        
+        # Show hint for development
+        if get_key("ADMIN_PASSWORD") == "tedpro2025" or not get_key("ADMIN_PASSWORD"):
+            st.warning("⚠️ Default password is active. Set ADMIN_PASSWORD in secrets for production.")
+        
+        st.stop()
+    
+    return True
+
 # Admin Dashboard
 def render_admin_dashboard():
-    """Render admin dashboard"""
-    st.header("🧸 TedPro Admin Dashboard")
+    """Render admin dashboard with authentication"""
+    # Check authentication first
+    check_admin_auth()
+    
+    # Show logout button
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.header("🧸 TedPro Admin Dashboard")
+    with col2:
+        if st.button("🚪 Logout"):
+            st.session_state.admin_authenticated = False
+            st.rerun()
+    
     st.markdown("Manage leads and analytics for CuddleHeros")
     
     # Leads section
@@ -269,8 +324,21 @@ def render_admin_dashboard():
     leads_df = get_leads_df()
     if not leads_df.empty:
         leads_df['est_value'] = leads_df['context'].apply(lambda x: 5 if 'sidebar' in x else 2)
+        
+        # Show summary metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Leads", len(leads_df))
+        with col2:
+            st.metric("Est. Value", f"${leads_df['est_value'].sum()}")
+        with col3:
+            unique_emails = leads_df['email'].nunique()
+            st.metric("Unique Contacts", unique_emails)
+        
+        # Show data table
         st.dataframe(leads_df, use_container_width=True)
-        st.metric("Est. Total Lead Value", f"${leads_df['est_value'].sum()}")
+        
+        # Export button
         csv = leads_df.to_csv(index=False)
         st.download_button(
             label="📥 Download Leads CSV",
@@ -281,11 +349,25 @@ def render_admin_dashboard():
     else:
         st.info("No leads captured yet.")
     
+    st.markdown("---")
+    
     # Analytics section
     st.subheader("📊 Analytics")
     analytics_df = get_analytics_df()
     if not analytics_df.empty:
+        # Show as metrics
+        cols = st.columns(3)
+        for idx, row in analytics_df.iterrows():
+            col_idx = idx % 3
+            with cols[col_idx]:
+                st.metric(row['key'].replace('_', ' ').title(), row['value'])
+        
+        st.markdown("---")
+        
+        # Show full table
         st.dataframe(analytics_df, use_container_width=True)
+        
+        # Export button
         csv = analytics_df.to_csv(index=False)
         st.download_button(
             label="📥 Download Analytics CSV",
@@ -326,6 +408,12 @@ def show_debug_panel():
         st.write("**Session:**")
         st.write(f"ID: {st.session_state.get('session_id', 'None')[:8]}...")
         st.write(f"Messages: {len(st.session_state.get('chat_history', []))}")
+        
+        # Admin status
+        if st.session_state.get('admin_authenticated', False):
+            st.success("🔓 Admin: Authenticated")
+        else:
+            st.info("🔒 Admin: Not authenticated")
         
         if st.button("🔄 Clear Cache"):
             st.cache_data.clear()
@@ -405,12 +493,21 @@ except Exception as e:
     st.error(f"Engine initialization failed: {e}")
     st.stop()
 
-# Multi-Page Setup
-pages = {
-    "Chat": lambda: None,
-    "Admin Dashboard": render_admin_dashboard
-}
+# Multi-Page Setup with Hidden Admin
+query_params = st.query_params
+show_admin_option = query_params.get("admin") == "true"
+
+if show_admin_option:
+    pages = {
+        "Chat": lambda: None,
+        "Admin Dashboard": render_admin_dashboard
+    }
+else:
+    # Regular users only see Chat
+    pages = {"Chat": lambda: None}
+
 page = st.sidebar.selectbox("Select Page", list(pages.keys()), key="page_selector")
+
 if page != "Chat":
     pages[page]()
     st.stop()
@@ -438,6 +535,10 @@ body { background: linear-gradient(180deg, #FFD5A5, #FFEDD2); font-family: 'Aria
 .lead-banner { background: linear-gradient(135deg,#FFE8D6,#FFD8B5); padding:20px; border-radius:12px;
     margin:15px 0; text-align:center; border:2px dashed #FFA94D; animation: pulse 2s infinite; }
 @keyframes pulse { 0% { border-color: #FFA94D; } 50% { border-color: #FF922B; } 100% { border-color: #FFA94D; } }
+@media (max-width: 768px) {
+    .conversation-scroll { max-height: 350px; padding: 8px; }
+    .user-msg, .bot-msg { padding: 8px; font-size: 14px; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -787,6 +888,6 @@ st.markdown("""
 <br><hr>
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro by CuddleHeros Team 🧸</small><br>
-<small style="color: #FFA94D;">Professional Assistant v3.2 - PostgreSQL Edition</small>
+<small style="color: #FFA94D;">Professional Assistant v3.2 - Secure Edition</small>
 </center>
 """, unsafe_allow_html=True)
