@@ -1,0 +1,18 @@
+name: Keep Streamlit Awake
+
+# Run every 4 hours + allow manual trigger
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send GET request
+        run: |
+          curl -f -L -X GET "${{ secrets.STREAMLIT_URL }}" \
+               -H "User-Agent: GitHub-Actions-KeepAlive/1.0"
+        env:
+          STREAMLIT_URL: ${{ secrets.STREAMLIT_URL }}
