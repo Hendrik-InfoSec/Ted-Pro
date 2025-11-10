@@ -2,7 +2,7 @@ name: Smart Keep Streamlit Awake
 
 on:
   schedule:
-    - cron: '0 */12 * * *'  # Every 12 hours (safer than 4h to avoid rate limits)
+    - cron: '0 */12 * * *'  # Every 12 hours 
   workflow_dispatch:  # Manual trigger button in GitHub
 
 jobs:
