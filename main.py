@@ -30,7 +30,7 @@ st.set_page_config(
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[RichHandler(rich_tracebacks=True)]
+    handlers=[RichHandler(rich_tracebacks:True)]
 )
 logger = logging.getLogger("TedPro")
 client_id = "tedpro_client"
@@ -110,10 +110,15 @@ def load_recent_conversation(session_id: str, limit: int = 50) -> List[Dict]:
         supabase = get_supabase_client()
         result = supabase.table('conversations').select(
             'role, content, timestamp'
-        ).eq('session_id', session_id).order('timestamp', desc=True).limit(limit).execute()
+        ).eq(
+            'session_id', session_id
+        ).order(
+            'timestamp', desc=True
+        ).limit(limit).execute()
        
         messages = result.data if result.data else []
-        return [{"role": msg['role'], "content": msg['content'], "timestamp": msg['timestamp']} for msg in reversed(messages)]
+        return [{"role": msg['role'], "content": msg['content'],
+                 "timestamp": msg['timestamp']} for msg in reversed(messages)]
     except Exception as e:
         logger.error(f"Database load error: {e}", exc_info=True)
         return []
@@ -158,7 +163,9 @@ def get_analytics() -> Dict[str, int]:
     }
     try:
         supabase = get_supabase_client()
-        result = supabase.table('analytics').select('key, value').eq('client_id', client_id).execute()
+        result = supabase.table('analytics').select(
+            'key, value'
+        ).eq('client_id', client_id).execute()
        
         if result.data:
             db_analytics = {row['key']: row['value'] for row in result.data}
@@ -174,15 +181,20 @@ def update_analytics(updates: Dict[str, int]):
         supabase = get_supabase_client()
        
         for key, increment in updates.items():
-            existing = supabase.table('analytics').select('value').eq('key', key).eq('client_id', client_id).execute()
+            # Check if key exists
+            existing = supabase.table('analytics').select('value').eq(
+                'key', key
+            ).eq('client_id', client_id).execute()
            
             if existing.data and len(existing.data) > 0:
+                # Update existing
                 new_value = existing.data[0]['value'] + increment
                 supabase.table('analytics').update({
                     'value': new_value,
                     'updated_at': datetime.now().isoformat()
                 }).eq('key', key).eq('client_id', client_id).execute()
             else:
+                # Insert new
                 supabase.table('analytics').insert({
                     'key': key,
                     'value': increment,
@@ -190,6 +202,7 @@ def update_analytics(updates: Dict[str, int]):
                     'client_id': client_id
                 }).execute()
        
+        # Update session state
         if "analytics" in st.session_state:
             for key, increment in updates.items():
                 st.session_state.analytics[key] = st.session_state.analytics.get(key, 0) + increment
@@ -263,7 +276,8 @@ def check_admin_auth() -> bool:
             )
        
         with col2:
-            st.write(""); st.write("")  # Spacing
+            st.write("") # Spacing
+            st.write("") # Spacing
             login_btn = st.button("Login", use_container_width=True)
        
         if login_btn:
@@ -276,10 +290,11 @@ def check_admin_auth() -> bool:
                 st.rerun()
             else:
                 st.error("Incorrect password")
-                logger.warning("Failed admin login attempt")
+                logger.warning(f"Failed admin login attempt")
        
+        # Show hint for development
         if get_key("ADMIN_PASSWORD") == "tedpro2025" or not get_key("ADMIN_PASSWORD"):
-            st.warning("Default password active. Set ADMIN_PASSWORD in secrets for production.")
+            st.warning("Default password is active. Set ADMIN_PASSWORD in secrets for production.")
        
         st.stop()
    
@@ -288,8 +303,10 @@ def check_admin_auth() -> bool:
 # Admin Dashboard
 def render_admin_dashboard():
     """Render admin dashboard with authentication"""
+    # Check authentication first
     check_admin_auth()
    
+    # Show logout button
     col1, col2 = st.columns([4, 1])
     with col1:
         st.header("TedPro Admin Dashboard")
@@ -300,21 +317,26 @@ def render_admin_dashboard():
    
     st.markdown("Manage leads and analytics for CuddleHeros")
    
+    # Leads section
     st.subheader("Leads")
     leads_df = get_leads_df()
     if not leads_df.empty:
         leads_df['est_value'] = leads_df['context'].apply(lambda x: 5 if 'sidebar' in x else 2)
        
+        # Show summary metrics
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Total Leads", len(leads_df))
         with col2:
             st.metric("Est. Value", f"${leads_df['est_value'].sum()}")
         with col3:
-            st.metric("Unique Contacts", leads_df['email'].nunique())
+            unique_emails = leads_df['email'].nunique()
+            st.metric("Unique Contacts", unique_emails)
        
+        # Show data table
         st.dataframe(leads_df, use_container_width=True)
        
+        # Export button
         csv = leads_df.to_csv(index=False)
         st.download_button(
             label="Download Leads CSV",
@@ -327,17 +349,23 @@ def render_admin_dashboard():
    
     st.markdown("---")
    
+    # Analytics section
     st.subheader("Analytics")
     analytics_df = get_analytics_df()
     if not analytics_df.empty:
+        # Show as metrics
         cols = st.columns(3)
         for idx, row in analytics_df.iterrows():
-            with cols[idx % 3]:
+            col_idx = idx % 3
+            with cols[col_idx]:
                 st.metric(row['key'].replace('_', ' ').title(), row['value'])
        
         st.markdown("---")
+       
+        # Show full table
         st.dataframe(analytics_df, use_container_width=True)
        
+        # Export button
         csv = analytics_df.to_csv(index=False)
         st.download_button(
             label="Download Analytics CSV",
@@ -354,6 +382,7 @@ def show_debug_panel():
     with st.sidebar.expander("Debug Panel", expanded=False):
         st.write("**Status:**")
        
+        # API Key
         api_key = get_key("OPENROUTER_API_KEY")
         if api_key:
             masked = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
@@ -361,19 +390,28 @@ def show_debug_panel():
         else:
             st.error("API Key: MISSING")
        
+        # Supabase
         try:
-            get_supabase_client()
+            supabase = get_supabase_client()
             st.success("Supabase: Connected")
         except:
             st.error("Supabase: Not connected")
        
-        st.success("Engine: Initialized") if 'engine' in st.session_state else st.error("Engine: Not initialized")
+        # Engine
+        if 'engine' in st.session_state:
+            st.success("Engine: Initialized")
+        else:
+            st.error("Engine: Not initialized")
        
         st.write("**Session:**")
         st.write(f"ID: {st.session_state.get('session_id', 'None')[:8]}...")
         st.write(f"Messages: {len(st.session_state.get('chat_history', []))}")
        
-        st.success("Admin: Authenticated") if st.session_state.get('admin_authenticated', False) else st.info("Admin: Not authenticated")
+        # Admin status
+        if st.session_state.get('admin_authenticated', False):
+            st.success("Admin: Authenticated")
+        else:
+            st.info("Admin: Not authenticated")
        
         if st.button("Clear Cache"):
             st.cache_data.clear()
@@ -385,12 +423,14 @@ def teddy_filter(user_message: str, raw_answer: str, is_first_message: bool, lea
     """Apply teddy personality with proper greeting logic"""
     greeting_added = False
    
+    # Only add greeting on first message if we haven't greeted yet
     if is_first_message and not st.session_state.get("has_greeted", False):
         friendly_prefix = "Hi there, friend! "
         greeting_added = True
     else:
         friendly_prefix = ""
    
+    # Add contextual sales prompts
     sales_tail = ""
     if not lead_captured:
         um = user_message.lower()
@@ -427,6 +467,8 @@ if not supabase_url or not supabase_key:
     Add to Streamlit Secrets:
     - `SUPABASE_URL = "https://xxx.supabase.co"`
     - `SUPABASE_KEY = "your-anon-key"`
+   
+    Get these from: https://supabase.com → Project Settings → API
     """)
     st.stop()
 
@@ -538,14 +580,14 @@ for key, default_value in default_states.items():
         else:
             st.session_state[key] = default_value
 
-# === Sidebar: Public + Admin-Only ===
+# Sidebar
 st.sidebar.markdown("### TedPro Assistant")
 st.sidebar.markdown("Your friendly plushie expert!")
 
 # Lead Capture Sidebar
 st.sidebar.markdown("### Get Product Updates")
-name_input = st.sidebar.text_input("Your Name", key="sidebar_name")
-email_input = st.sidebar.text_input("Your Email", key="sidebar_email")
+name = st.sidebar.text_input("Your Name", key="sidebar_name")
+email = st.sidebar.text_input("Your Email", key="sidebar_email")
 subscribe_disabled = st.session_state.lead_captured
 
 if st.sidebar.button(
@@ -553,25 +595,25 @@ if st.sidebar.button(
     disabled=subscribe_disabled,
     key="sidebar_subscribe"
 ):
-    if name_input and email_input:
-        extracted_email = extract_email(email_input)
+    if name and email:
+        extracted_email = extract_email(email)
         if extracted_email:
             try:
                 hashed_email = hashlib.sha256(extracted_email.encode()).hexdigest()
                 if hashed_email not in st.session_state.captured_emails:
-                    engine.add_lead(name_input, extracted_email, context="sidebar_signup")
+                    engine.add_lead(name, extracted_email, context="sidebar_signup")
                     st.session_state.captured_emails.add(hashed_email)
                     update_analytics({"lead_captures": 1})
                     st.session_state.lead_captured = True
                     st.sidebar.success("Thanks! We'll send updates soon.")
-                    send_lead_notification(name_input, extracted_email, "sidebar_signup")
-                    logger.info(f"Lead captured: {name_input} <{extracted_email}>")
+                    send_lead_notification(name, extracted_email, "sidebar_signup")
+                    logger.info(f"Lead captured: {name} <{extracted_email}>")
                     st.rerun()
                 else:
                     st.sidebar.info("You're already subscribed!")
             except Exception as e:
                 logger.error(f"Lead capture error: {e}", exc_info=True)
-                st.sidebar.error("Failed to save.")
+                st.sidebar.error(f"Failed to save: {e}")
         else:
             st.sidebar.warning("Please enter a valid email.")
     else:
@@ -588,13 +630,13 @@ if admin_mode and st.session_state.get("admin_authenticated", False):
         st.metric("Leads", st.session_state.analytics.get("lead_captures", 0))
     
     with st.sidebar.expander("Detailed Metrics"):
-        for k, v in st.session_state.analytics.items():
-            st.metric(k.replace("_", " ").title(), v)
+        for key, val in st.session_state.analytics.items():
+            st.metric(key.replace("_", " ").title(), val)
 
 if admin_mode:
     show_debug_panel()
 
-# === Main Chat Interface ===
+# Main Chat Interface
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
     st.markdown('<h1 style="color:#FF922B;">TedPro Marketing Assistant</h1>', unsafe_allow_html=True)
@@ -631,7 +673,7 @@ if should_show_quick_questions and not st.session_state.processing_active:
             label_visibility="collapsed"
         )
         submitted = st.form_submit_button("Ask this question")
-        if submitted and selected_question:  # FIXED LINE
+        if submitted and selected_question:
             st.session_state.selected_quick_question = selected_question
             logger.info(f"Quick question: {selected_question}")
 
@@ -729,8 +771,10 @@ if submit_btn and user_input.strip() and not st.session_state.processing_active:
     is_first_message = len([m for m in st.session_state.chat_history if "user" in m]) == 1
 
     try:
-raw_response = engine.answer(user_input) 
-filtered_response, greeted = teddy_filter(
+        # FIXED: Use .answer() instead of .get_response()
+        raw_response = engine.answer(user_input)
+
+        filtered_response, greeted = teddy_filter(
             user_input, raw_response, is_first_message, st.session_state.lead_captured
         )
         if greeted:
@@ -774,5 +818,3 @@ st.markdown("""
     }
 </script>
 """, unsafe_allow_html=True)
-
-
