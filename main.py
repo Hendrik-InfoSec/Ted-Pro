@@ -729,8 +729,8 @@ if submit_btn and user_input.strip() and not st.session_state.processing_active:
     is_first_message = len([m for m in st.session_state.chat_history if "user" in m]) == 1
 
     try:
-        raw_response = engine.get_response(user_input)
-        filtered_response, greeted = teddy_filter(
+raw_response = engine.answer(user_input) 
+filtered_response, greeted = teddy_filter(
             user_input, raw_response, is_first_message, st.session_state.lead_captured
         )
         if greeted:
@@ -774,4 +774,5 @@ st.markdown("""
     }
 </script>
 """, unsafe_allow_html=True)
+
 
