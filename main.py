@@ -631,7 +631,7 @@ if should_show_quick_questions and not st.session_state.processing_active:
             label_visibility="collapsed"
         )
         submitted = st.form_submit_button("Ask this question")
-        if?submitted and selected_question:
+        if submitted and selected_question:  # FIXED LINE
             st.session_state.selected_quick_question = selected_question
             logger.info(f"Quick question: {selected_question}")
 
@@ -774,3 +774,4 @@ st.markdown("""
     }
 </script>
 """, unsafe_allow_html=True)
+
