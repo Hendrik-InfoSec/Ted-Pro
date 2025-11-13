@@ -507,35 +507,41 @@ except Exception as e:
     st.error(f"Engine initialization failed: {e}")
     st.stop()
 
-# Multi-Page Setup with Hidden Admin
-# Check if admin mode is enabled via URL parameter
+# Multi-Page Setup - FIXED: Check query params properly
 try:
+    # Get query params - this works in both old and new Streamlit versions
     query_params = st.query_params
-    show_admin_option = "admin" in query_params and query_params["admin"] == "true"
-except:
+    # Convert to dict if needed for compatibility
+    if hasattr(query_params, 'to_dict'):
+        query_params = query_params.to_dict()
+    show_admin_option = query_params.get("admin", [""])[0] == "true" if isinstance(query_params.get("admin", [""]), list) else query_params.get("admin", "") == "true"
+except Exception as e:
+    logger.warning(f"Query params error: {e}")
     show_admin_option = False
 
-# Only show admin page if ?admin=true is in URL
+# Define pages
 if show_admin_option:
     pages = {
-        "Chat": lambda: None,
-        "Admin Dashboard": render_admin_dashboard
+        "Chat": "chat",
+        "Admin Dashboard": "admin"
     }
     logger.info("🔓 Admin mode enabled via URL parameter")
 else:
-    # Regular users only see Chat
-    pages = {"Chat": lambda: None}
+    pages = {"Chat": "chat"}
     logger.info("👤 Regular user mode - admin hidden")
 
-# Only show page selector if there's more than one page
-if len(pages) > 1:
-    page = st.sidebar.selectbox("Select Page", list(pages.keys()), key="page_selector")
-else:
-    page = "Chat"
+# Page Navigation - ONLY SHOW IF ADMIN MODE
+current_page = "chat"
+if show_admin_option and len(pages) > 1:
+    page_selection = st.sidebar.selectbox("📍 Navigate", list(pages.keys()), key="page_selector")
+    current_page = pages[page_selection]
 
-if page != "Chat":
-    pages[page]()
+# Render the selected page
+if current_page == "admin":
+    render_admin_dashboard()
     st.stop()
+
+# Continue with Chat page below...
 
 # UI Styling
 st.markdown("""
@@ -608,16 +614,17 @@ for key, default_value in default_states.items():
 st.sidebar.markdown("### 🧸 TedPro Assistant")
 st.sidebar.markdown("Your friendly plushie expert!")
 
-# ANALYTICS - ONLY SHOW IF ADMIN MODE
-if show_admin_option and st.session_state.get("admin_authenticated", False):
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📊 Live Analytics")
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        st.metric("Messages", st.session_state.analytics.get("total_messages", 0))
-    with col2:
-        st.metric("Leads", st.session_state.analytics.get("lead_captures", 0))
+# ANALYTICS - ALWAYS SHOW IN SIDEBAR (moved before conditional)
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📊 Live Stats")
+col1, col2 = st.sidebar.columns(2)
+with col1:
+    st.metric("Messages", st.session_state.analytics.get("total_messages", 0))
+with col2:
+    st.metric("Leads", st.session_state.analytics.get("lead_captures", 0))
 
+# Show detailed metrics for admin users only
+if show_admin_option and st.session_state.get("admin_authenticated", False):
     with st.sidebar.expander("📈 Detailed Metrics"):
         st.metric("FAQ Answers", st.session_state.analytics.get("faq_questions", 0))
         st.metric("Sales Inquiries", st.session_state.analytics.get("sales_related", 0))
@@ -662,9 +669,8 @@ if st.sidebar.button(
     else:
         st.sidebar.warning("Please enter both name and email.")
 
-# DEBUG PANEL - ONLY SHOW IF ADMIN MODE
-if show_admin_option:
-    show_debug_panel()
+# DEBUG PANEL - ALWAYS SHOW FOR TRANSPARENCY
+show_debug_panel()
 
 # Main Chat Interface
 col1, col2, col3 = st.columns([3, 1, 1])
@@ -915,6 +921,6 @@ st.markdown("""
 <br><hr>
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro by CuddleHeros Team 🧸</small><br>
-<small style="color: #FFA94D;">Professional Assistant v3.2 - Clean Edition</small>
+<small style="color: #FFA94D;">Professional Assistant v3.3 - Fixed Edition</small>
 </center>
 """, unsafe_allow_html=True)
