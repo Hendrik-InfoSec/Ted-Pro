@@ -20,11 +20,25 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="expanded",
     menu_items={
-        'Get Help': 'https://cuddleheroes.example.com/support',
-        'Report a bug': 'https://cuddleheroes.example.com/bugs',
-        'About': 'TedPro: Your friendly plushie assistant by CuddleHeros!'
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
     }
 )
+
+# Hide Streamlit's default UI elements
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stDeployButton {display: none;}
+    button[kind="header"] {display: none;}
+    .viewerBadge_container__1QSob {display: none;}
+    .viewerBadge_link__1S137 {display: none;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # Configure logging
 logging.basicConfig(
