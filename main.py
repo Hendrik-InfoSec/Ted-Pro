@@ -272,6 +272,20 @@ Login to your dashboard to see full details.
         logger.error(f"Email notification error: {e}", exc_info=True)
         return False
 
+# Check if user is admin/dev
+def is_dev_mode() -> bool:
+    """Check if running in dev mode"""
+    try:
+        params = st.query_params
+        # Handle both old and new Streamlit versions
+        if hasattr(params, 'get_all'):
+            return params.get_all("dev") == ["true"]
+        else:
+            dev_param = params.get("dev", "")
+            return dev_param == "true" if isinstance(dev_param, str) else False
+    except:
+        return False
+
 # Admin Authentication
 def check_admin_auth() -> bool:
     """Check if user is authenticated as admin"""
@@ -292,8 +306,8 @@ def check_admin_auth() -> bool:
             )
         
         with col2:
-            st.write("")  # Spacing
-            st.write("")  # Spacing
+            st.write("")
+            st.write("")
             login_btn = st.button("🔓 Login", use_container_width=True)
         
         if login_btn:
@@ -308,10 +322,6 @@ def check_admin_auth() -> bool:
                 st.error("❌ Incorrect password")
                 logger.warning(f"Failed admin login attempt")
         
-        # Show hint for development
-        if get_key("ADMIN_PASSWORD") == "tedpro2025" or not get_key("ADMIN_PASSWORD"):
-            st.warning("⚠️ Default password is active. Set ADMIN_PASSWORD in secrets for production.")
-        
         st.stop()
     
     return True
@@ -319,10 +329,8 @@ def check_admin_auth() -> bool:
 # Admin Dashboard
 def render_admin_dashboard():
     """Render admin dashboard with authentication"""
-    # Check authentication first
     check_admin_auth()
     
-    # Show logout button
     col1, col2 = st.columns([4, 1])
     with col1:
         st.header("🧸 TedPro Admin Dashboard")
@@ -339,7 +347,6 @@ def render_admin_dashboard():
     if not leads_df.empty:
         leads_df['est_value'] = leads_df['context'].apply(lambda x: 5 if 'sidebar' in x else 2)
         
-        # Show summary metrics
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Total Leads", len(leads_df))
@@ -349,10 +356,8 @@ def render_admin_dashboard():
             unique_emails = leads_df['email'].nunique()
             st.metric("Unique Contacts", unique_emails)
         
-        # Show data table
         st.dataframe(leads_df, use_container_width=True)
         
-        # Export button
         csv = leads_df.to_csv(index=False)
         st.download_button(
             label="📥 Download Leads CSV",
@@ -369,7 +374,6 @@ def render_admin_dashboard():
     st.subheader("📊 Analytics")
     analytics_df = get_analytics_df()
     if not analytics_df.empty:
-        # Show as metrics
         cols = st.columns(3)
         for idx, row in analytics_df.iterrows():
             col_idx = idx % 3
@@ -377,11 +381,8 @@ def render_admin_dashboard():
                 st.metric(row['key'].replace('_', ' ').title(), row['value'])
         
         st.markdown("---")
-        
-        # Show full table
         st.dataframe(analytics_df, use_container_width=True)
         
-        # Export button
         csv = analytics_df.to_csv(index=False)
         st.download_button(
             label="📥 Download Analytics CSV",
@@ -392,13 +393,15 @@ def render_admin_dashboard():
     else:
         st.info("No analytics data yet.")
 
-# Debug Panel
+# Debug Panel - DEV ONLY
 def show_debug_panel():
-    """Show debug information"""
-    with st.sidebar.expander("🔧 Debug Panel", expanded=False):
+    """Show debug information - DEV MODE ONLY"""
+    if not is_dev_mode():
+        return
+        
+    with st.sidebar.expander("🔧 Debug Panel (Dev Only)", expanded=False):
         st.write("**Status:**")
         
-        # API Key
         api_key = get_key("OPENROUTER_API_KEY")
         if api_key:
             masked = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
@@ -406,14 +409,12 @@ def show_debug_panel():
         else:
             st.error("❌ API Key: MISSING")
         
-        # Supabase
         try:
             supabase = get_supabase_client()
             st.success("✅ Supabase: Connected")
         except:
             st.error("❌ Supabase: Not connected")
         
-        # Engine
         if 'engine' in st.session_state:
             st.success("✅ Engine: Initialized")
         else:
@@ -423,7 +424,6 @@ def show_debug_panel():
         st.write(f"ID: {st.session_state.get('session_id', 'None')[:8]}...")
         st.write(f"Messages: {len(st.session_state.get('chat_history', []))}")
         
-        # Admin status
         if st.session_state.get('admin_authenticated', False):
             st.success("🔓 Admin: Authenticated")
         else:
@@ -439,14 +439,12 @@ def teddy_filter(user_message: str, raw_answer: str, is_first_message: bool, lea
     """Apply teddy personality with proper greeting logic"""
     greeting_added = False
     
-    # Only add greeting on first message if we haven't greeted yet
     if is_first_message and not st.session_state.get("has_greeted", False):
         friendly_prefix = "Hi there, friend! 🧸 "
         greeting_added = True
     else:
         friendly_prefix = ""
     
-    # Add contextual sales prompts
     sales_tail = ""
     if not lead_captured:
         um = user_message.lower()
@@ -507,41 +505,22 @@ except Exception as e:
     st.error(f"Engine initialization failed: {e}")
     st.stop()
 
-# Multi-Page Setup - FIXED: Check query params properly
+# Check for admin mode in URL
+dev_mode = is_dev_mode()
 try:
-    # Get query params - this works in both old and new Streamlit versions
-    query_params = st.query_params
-    # Convert to dict if needed for compatibility
-    if hasattr(query_params, 'to_dict'):
-        query_params = query_params.to_dict()
-    show_admin_option = query_params.get("admin", [""])[0] == "true" if isinstance(query_params.get("admin", [""]), list) else query_params.get("admin", "") == "true"
-except Exception as e:
-    logger.warning(f"Query params error: {e}")
-    show_admin_option = False
+    params = st.query_params
+    if hasattr(params, 'get_all'):
+        admin_mode = params.get_all("admin") == ["true"]
+    else:
+        admin_param = params.get("admin", "")
+        admin_mode = admin_param == "true" if isinstance(admin_param, str) else False
+except:
+    admin_mode = False
 
-# Define pages
-if show_admin_option:
-    pages = {
-        "Chat": "chat",
-        "Admin Dashboard": "admin"
-    }
-    logger.info("🔓 Admin mode enabled via URL parameter")
-else:
-    pages = {"Chat": "chat"}
-    logger.info("👤 Regular user mode - admin hidden")
-
-# Page Navigation - ONLY SHOW IF ADMIN MODE
-current_page = "chat"
-if show_admin_option and len(pages) > 1:
-    page_selection = st.sidebar.selectbox("📍 Navigate", list(pages.keys()), key="page_selector")
-    current_page = pages[page_selection]
-
-# Render the selected page
-if current_page == "admin":
+# Handle admin dashboard access
+if admin_mode:
     render_admin_dashboard()
     st.stop()
-
-# Continue with Chat page below...
 
 # UI Styling
 st.markdown("""
@@ -610,40 +589,24 @@ for key, default_value in default_states.items():
         else:
             st.session_state[key] = default_value
 
-# Sidebar
+# SIDEBAR - ALWAYS VISIBLE
 st.sidebar.markdown("### 🧸 TedPro Assistant")
 st.sidebar.markdown("Your friendly plushie expert!")
-
-# ANALYTICS - ALWAYS SHOW IN SIDEBAR (moved before conditional)
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📊 Live Stats")
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    st.metric("Messages", st.session_state.analytics.get("total_messages", 0))
-with col2:
-    st.metric("Leads", st.session_state.analytics.get("lead_captures", 0))
-
-# Show detailed metrics for admin users only
-if show_admin_option and st.session_state.get("admin_authenticated", False):
-    with st.sidebar.expander("📈 Detailed Metrics"):
-        st.metric("FAQ Answers", st.session_state.analytics.get("faq_questions", 0))
-        st.metric("Sales Inquiries", st.session_state.analytics.get("sales_related", 0))
-        st.metric("Order Tracking", st.session_state.analytics.get("order_tracking", 0))
-        st.metric("Total Sessions", st.session_state.analytics.get("total_sessions", 0))
-        st.metric("Affiliate Clicks", st.session_state.analytics.get("affiliate_clicks", 0))
-
 st.sidebar.markdown("---")
 
-# Lead Capture Sidebar
+# Lead Capture - ALWAYS VISIBLE
 st.sidebar.markdown("### 💌 Get Product Updates")
-name = st.sidebar.text_input("Your Name", key="sidebar_name")
-email = st.sidebar.text_input("Your Email", key="sidebar_email")
+st.sidebar.markdown("*Join our mailing list for exclusive offers!*")
+
+name = st.sidebar.text_input("Your Name", key="sidebar_name", placeholder="Enter your name")
+email = st.sidebar.text_input("Your Email", key="sidebar_email", placeholder="your@email.com")
 
 subscribe_disabled = st.session_state.lead_captured
 if st.sidebar.button(
-    "✅ Subscribed!" if subscribe_disabled else "Get Catalog 🎁",
+    "✅ Subscribed!" if subscribe_disabled else "📬 Get Catalog",
     disabled=subscribe_disabled,
-    key="sidebar_subscribe"
+    key="sidebar_subscribe",
+    use_container_width=True
 ):
     if name and email:
         extracted_email = extract_email(email)
@@ -655,21 +618,32 @@ if st.sidebar.button(
                     st.session_state.captured_emails.add(hashed_email)
                     update_analytics({"lead_captures": 1})
                     st.session_state.lead_captured = True
-                    st.sidebar.success("🎉 Thanks! We'll send updates soon.")
+                    st.sidebar.success("🎉 Thanks! Check your inbox soon.")
                     send_lead_notification(name, extracted_email, "sidebar_signup")
                     logger.info(f"📧 Lead captured: {name} <{extracted_email}>")
+                    time.sleep(1)
                     st.rerun()
                 else:
                     st.sidebar.info("📧 You're already subscribed!")
             except Exception as e:
                 logger.error(f"Lead capture error: {e}", exc_info=True)
-                st.sidebar.error(f"Failed to save: {e}")
+                st.sidebar.error("Failed to save. Please try again.")
         else:
-            st.sidebar.warning("Please enter a valid email.")
+            st.sidebar.warning("⚠️ Please enter a valid email.")
     else:
-        st.sidebar.warning("Please enter both name and email.")
+        st.sidebar.warning("⚠️ Please fill in both fields.")
 
-# DEBUG PANEL - ALWAYS SHOW FOR TRANSPARENCY
+st.sidebar.markdown("---")
+
+# Quick Stats - ALWAYS VISIBLE
+st.sidebar.markdown("### 📊 Activity")
+col1, col2 = st.sidebar.columns(2)
+with col1:
+    st.metric("💬 Chats", st.session_state.analytics.get("total_messages", 0))
+with col2:
+    st.metric("🎯 Leads", st.session_state.analytics.get("lead_captures", 0))
+
+# Debug Panel - DEV MODE ONLY
 show_debug_panel()
 
 # Main Chat Interface
@@ -714,7 +688,7 @@ if should_show_quick_questions and not st.session_state.processing_active:
             st.session_state.selected_quick_question = selected_question
             logger.info(f"🎯 Quick question: {selected_question}")
 
-# Lead Banner - SIMPLIFIED
+# Lead Banner
 def should_show_lead_banner() -> bool:
     if st.session_state.lead_captured:
         return False
@@ -851,9 +825,9 @@ def process_message(user_input: str):
             
             # Add affiliate button
             if is_purchase_intent:
-                if st.button("Shop on Amazon", key=f"affiliate_{uuid.uuid4()}"):
+                if st.button("🛒 Shop on Amazon", key=f"affiliate_{uuid.uuid4()}"):
                     update_analytics({"affiliate_clicks": 1})
-                    st.markdown(f"<a href='{affiliate_url}' target='_blank'>Redirecting...</a>", unsafe_allow_html=True)
+                    st.markdown(f"<meta http-equiv='refresh' content='0;url={affiliate_url}'>", unsafe_allow_html=True)
             
             # Save bot response
             bot_message_data = {"bot": filtered_response, "timestamp": datetime.now().isoformat()}
@@ -921,6 +895,6 @@ st.markdown("""
 <br><hr>
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro by CuddleHeros Team 🧸</small><br>
-<small style="color: #FFA94D;">Professional Assistant v3.3 - Fixed Edition</small>
+<small style="color: #FFA94D;">Professional Assistant v3.4 - Polished Edition</small>
 </center>
 """, unsafe_allow_html=True)
