@@ -589,62 +589,84 @@ for key, default_value in default_states.items():
         else:
             st.session_state[key] = default_value
 
-# SIDEBAR - ALWAYS VISIBLE
-st.sidebar.markdown("### 🧸 TedPro Assistant")
-st.sidebar.markdown("Your friendly plushie expert!")
-st.sidebar.markdown("---")
-
-# Lead Capture - ALWAYS VISIBLE
-st.sidebar.markdown("### 💌 Get Product Updates")
-st.sidebar.markdown("*Join our mailing list for exclusive offers!*")
-
-name = st.sidebar.text_input("Your Name", key="sidebar_name", placeholder="Enter your name")
-email = st.sidebar.text_input("Your Email", key="sidebar_email", placeholder="your@email.com")
-
-subscribe_disabled = st.session_state.lead_captured
-if st.sidebar.button(
-    "✅ Subscribed!" if subscribe_disabled else "📬 Get Catalog",
-    disabled=subscribe_disabled,
-    key="sidebar_subscribe",
-    use_container_width=True
-):
-    if name and email:
-        extracted_email = extract_email(email)
-        if extracted_email:
-            try:
-                hashed_email = hashlib.sha256(extracted_email.encode()).hexdigest()
-                if hashed_email not in st.session_state.captured_emails:
-                    engine.add_lead(name, extracted_email, context="sidebar_signup")
-                    st.session_state.captured_emails.add(hashed_email)
-                    update_analytics({"lead_captures": 1})
-                    st.session_state.lead_captured = True
-                    st.sidebar.success("🎉 Thanks! Check your inbox soon.")
-                    send_lead_notification(name, extracted_email, "sidebar_signup")
-                    logger.info(f"📧 Lead captured: {name} <{extracted_email}>")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.sidebar.info("📧 You're already subscribed!")
-            except Exception as e:
-                logger.error(f"Lead capture error: {e}", exc_info=True)
-                st.sidebar.error("Failed to save. Please try again.")
+# ========================================
+# SIDEBAR - ALWAYS VISIBLE FOR ALL USERS
+# ========================================
+with st.sidebar:
+    # Branding
+    st.markdown("### 🧸 TedPro Assistant")
+    st.caption("Your friendly plushie expert!")
+    st.markdown("---")
+    
+    # Lead Capture Form - PRIMARY FEATURE
+    st.markdown("### 📬 Get Free Catalog")
+    st.markdown("**Get exclusive offers & updates!**")
+    
+    # Name input
+    name = st.text_input(
+        "Name",
+        key="sidebar_name",
+        placeholder="Your name",
+        label_visibility="collapsed",
+        help="We'll use this to personalize your emails"
+    )
+    
+    # Email input
+    email = st.text_input(
+        "Email",
+        key="sidebar_email",
+        placeholder="your@email.com",
+        label_visibility="collapsed",
+        help="We respect your privacy - no spam!"
+    )
+    
+    # Submit button
+    subscribe_disabled = st.session_state.lead_captured
+    button_text = "✅ Already Subscribed!" if subscribe_disabled else "🎁 Send Me the Catalog"
+    
+    if st.button(
+        button_text,
+        disabled=subscribe_disabled,
+        key="sidebar_subscribe",
+        use_container_width=True,
+        type="primary"
+    ):
+        if name and email:
+            extracted_email = extract_email(email)
+            if extracted_email:
+                try:
+                    hashed_email = hashlib.sha256(extracted_email.encode()).hexdigest()
+                    if hashed_email not in st.session_state.captured_emails:
+                        engine.add_lead(name, extracted_email, context="sidebar_signup")
+                        st.session_state.captured_emails.add(hashed_email)
+                        update_analytics({"lead_captures": 1})
+                        st.session_state.lead_captured = True
+                        st.success("🎉 Thanks! Check your inbox soon.")
+                        send_lead_notification(name, extracted_email, "sidebar_signup")
+                        logger.info(f"📧 Lead captured: {name} <{extracted_email}>")
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.info("📧 You're already on our list!")
+                except Exception as e:
+                    logger.error(f"Lead capture error: {e}", exc_info=True)
+                    st.error("Oops! Please try again.")
+            else:
+                st.warning("⚠️ Please enter a valid email.")
         else:
-            st.sidebar.warning("⚠️ Please enter a valid email.")
-    else:
-        st.sidebar.warning("⚠️ Please fill in both fields.")
-
-st.sidebar.markdown("---")
-
-# Quick Stats - ALWAYS VISIBLE
-st.sidebar.markdown("### 📊 Activity")
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    st.metric("💬 Chats", st.session_state.analytics.get("total_messages", 0))
-with col2:
-    st.metric("🎯 Leads", st.session_state.analytics.get("lead_captures", 0))
-
-# Debug Panel - DEV MODE ONLY
-show_debug_panel()
+            st.warning("⚠️ Please fill in both fields.")
+    
+    # Benefits list
+    if not st.session_state.lead_captured:
+        st.markdown("---")
+        st.markdown("**What you'll get:**")
+        st.markdown("✨ Full product catalog")
+        st.markdown("💰 Exclusive discounts")
+        st.markdown("🎁 Gift ideas & tips")
+        st.markdown("📦 New arrival alerts")
+    
+    # Debug Panel - DEV MODE ONLY (includes stats for devs)
+    show_debug_panel()
 
 # Main Chat Interface
 col1, col2, col3 = st.columns([3, 1, 1])
