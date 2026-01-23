@@ -1,0 +1,18 @@
+[server]
+# Render assigns a dynamic PORT - Streamlit will read from $PORT env var
+port = 8501
+address = "0.0.0.0"
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+serverAddress = "0.0.0.0"
+
+[theme]
+primaryColor = "#FF922B"
+backgroundColor = "#FFEDD2"
+secondaryBackgroundColor = "#FFD5A5"
+textColor = "#2D1B00"
+font = "sans serif"
