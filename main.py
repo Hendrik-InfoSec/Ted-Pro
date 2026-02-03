@@ -195,20 +195,17 @@ def update_analytics(updates: Dict[str, int]):
         supabase = get_supabase_client()
         
         for key, increment in updates.items():
-            # Check if key exists
             existing = supabase.table('analytics').select('value').eq(
                 'key', key
             ).eq('client_id', client_id).execute()
             
             if existing.data and len(existing.data) > 0:
-                # Update existing
                 new_value = existing.data[0]['value'] + increment
                 supabase.table('analytics').update({
                     'value': new_value,
                     'updated_at': datetime.now().isoformat()
                 }).eq('key', key).eq('client_id', client_id).execute()
             else:
-                # Insert new
                 supabase.table('analytics').insert({
                     'key': key,
                     'value': increment,
@@ -216,7 +213,6 @@ def update_analytics(updates: Dict[str, int]):
                     'client_id': client_id
                 }).execute()
         
-        # Update session state
         if "analytics" in st.session_state:
             for key, increment in updates.items():
                 st.session_state.analytics[key] = st.session_state.analytics.get(key, 0) + increment
@@ -277,7 +273,6 @@ def is_dev_mode() -> bool:
     """Check if running in dev mode"""
     try:
         params = st.query_params
-        # Handle both old and new Streamlit versions
         if hasattr(params, 'get_all'):
             return params.get_all("dev") == ["true"]
         else:
@@ -341,7 +336,6 @@ def render_admin_dashboard():
     
     st.markdown("Manage leads and analytics for CuddleHeros")
     
-    # Leads section
     st.subheader("📧 Leads")
     leads_df = get_leads_df()
     if not leads_df.empty:
@@ -370,7 +364,6 @@ def render_admin_dashboard():
     
     st.markdown("---")
     
-    # Analytics section
     st.subheader("📊 Analytics")
     analytics_df = get_analytics_df()
     if not analytics_df.empty:
@@ -467,7 +460,7 @@ if not api_key:
     🔑 **API Key Missing!**
     
     Add to Streamlit Secrets:
-    - `OPENROUTER_API_KEY = "your-key-here"`
+    - OPENROUTER_API_KEY = "your-key-here"
     
     Get one at: https://openrouter.ai/keys
     """)
@@ -481,8 +474,8 @@ if not supabase_url or not supabase_key:
     🗄️ **Supabase Credentials Missing!**
     
     Add to Streamlit Secrets:
-    - `SUPABASE_URL = "https://xxx.supabase.co"`
-    - `SUPABASE_KEY = "your-anon-key"`
+    - SUPABASE_URL = "https://xxx.supabase.co"
+    - SUPABASE_KEY = "your-anon-key"
     
     Get these from: https://supabase.com → Project Settings → API
     """)
@@ -574,6 +567,7 @@ default_states = {
     "last_error": None,
     "affiliate_tag": get_key("AMAZON_TAG") or "yourid-20",
     "has_greeted": False,
+    "temp_user_input": "",           # ← new: controlled input
 }
 
 for key, default_value in default_states.items():
@@ -593,16 +587,13 @@ for key, default_value in default_states.items():
 # SIDEBAR - ALWAYS VISIBLE FOR ALL USERS
 # ========================================
 with st.sidebar:
-    # Branding
     st.markdown("### 🧸 TedPro Assistant")
     st.caption("Your friendly plushie expert!")
     st.markdown("---")
     
-    # Lead Capture Form - PRIMARY FEATURE
     st.markdown("### 📬 Get Free Catalog")
     st.markdown("**Get exclusive offers & updates!**")
     
-    # Name input
     name = st.text_input(
         "Name",
         key="sidebar_name",
@@ -611,7 +602,6 @@ with st.sidebar:
         help="We'll use this to personalize your emails"
     )
     
-    # Email input
     email = st.text_input(
         "Email",
         key="sidebar_email",
@@ -620,7 +610,6 @@ with st.sidebar:
         help="We respect your privacy - no spam!"
     )
     
-    # Submit button
     subscribe_disabled = st.session_state.lead_captured
     button_text = "✅ Already Subscribed!" if subscribe_disabled else "🎁 Send Me the Catalog"
     
@@ -656,7 +645,6 @@ with st.sidebar:
         else:
             st.warning("⚠️ Please fill in both fields.")
     
-    # Benefits list
     if not st.session_state.lead_captured:
         st.markdown("---")
         st.markdown("**What you'll get:**")
@@ -665,7 +653,6 @@ with st.sidebar:
         st.markdown("🎁 Gift ideas & tips")
         st.markdown("📦 New arrival alerts")
     
-    # Debug Panel - DEV MODE ONLY (includes stats for devs)
     show_debug_panel()
 
 # Main Chat Interface
@@ -699,16 +686,15 @@ if should_show_quick_questions and not st.session_state.processing_active:
     ]
     
     with st.form("quick_questions_form"):
-        selected_question = st.radio(
+        selected = st.radio(
             "Choose a question:",
             quick_questions,
             key="quick_questions_radio",
             label_visibility="collapsed"
         )
-        submitted = st.form_submit_button("Ask this question")
-        if submitted and selected_question:
-            st.session_state.selected_quick_question = selected_question
-            logger.info(f"🎯 Quick question: {selected_question}")
+        if st.form_submit_button("Ask this question"):
+            st.session_state.temp_user_input = selected
+            st.rerun()   # will be picked up by main form handler
 
 # Lead Banner
 def should_show_lead_banner() -> bool:
@@ -746,9 +732,8 @@ def display_chat():
             )
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Message Processing
+# Message Processing (your original logic - unchanged except context)
 def process_message(user_input: str):
-    """Process user message"""
     current_time = time.time()
     if current_time - st.session_state.last_processed_time < 0.5:
         return
@@ -772,11 +757,9 @@ def process_message(user_input: str):
             ack_msg = "Thanks! Could you share your email now?"
             st.session_state.chat_history.append({"bot": ack_msg, "timestamp": datetime.now().isoformat()})
             append_to_conversation("assistant", ack_msg, st.session_state.session_id)
-            st.session_state.processing_active = False
-            st.rerun()
             return
         
-        # Lead capture
+        # Lead capture from chat
         if not st.session_state.lead_captured and st.session_state.lead_consent:
             maybe_email = extract_email(user_input)
             if maybe_email:
@@ -821,37 +804,31 @@ def process_message(user_input: str):
                     unsafe_allow_html=True
                 )
             
-            # Apply teddy filter
             filtered_response, greeting_added = teddy_filter(user_input, raw_response, is_first_message, st.session_state.lead_captured)
             
             if greeting_added:
                 st.session_state.has_greeted = True
             
-            # Add consent prompt if needed
             if not st.session_state.lead_consent and not st.session_state.get("consent_prompt_shown", False):
                 filtered_response += " Can I save your email for updates? Reply YES."
                 st.session_state.consent_prompt_shown = True
             
-            # Add affiliate link for purchase intent
             is_purchase_intent = any(k in user_input_lower for k in ["buy", "order", "purchase"])
             if is_purchase_intent:
                 affiliate_url = f"https://amazon.com/s?k=plushies&tag={st.session_state.affiliate_tag}"
                 filtered_response += f" 💳 You can order at [Amazon]({affiliate_url})."
             
-            # Update display
             bot_placeholder.markdown(
                 f"<div class='bot-msg'><b>TedPro:</b> {filtered_response}"
                 f"<div style='font-size:11px;color:#5A3A1B;text-align:right'>{format_timestamp(datetime.now().isoformat())}</div></div>",
                 unsafe_allow_html=True
             )
             
-            # Add affiliate button
             if is_purchase_intent:
                 if st.button("🛒 Shop on Amazon", key=f"affiliate_{uuid.uuid4()}"):
                     update_analytics({"affiliate_clicks": 1})
                     st.markdown(f"<meta http-equiv='refresh' content='0;url={affiliate_url}'>", unsafe_allow_html=True)
             
-            # Save bot response
             bot_message_data = {"bot": filtered_response, "timestamp": datetime.now().isoformat()}
             st.session_state.chat_history.append(bot_message_data)
             append_to_conversation("assistant", filtered_response, st.session_state.session_id)
@@ -875,9 +852,47 @@ def process_message(user_input: str):
     
     finally:
         st.session_state.processing_active = False
-        st.rerun()
 
-# Main Chat Rendering
+# ────────────────────────────────────────────────
+#           CHAT INPUT & MAIN CONTROL FLOW
+# ────────────────────────────────────────────────
+
+def handle_chat_submit():
+    user_text = st.session_state.temp_user_input.strip()
+    if not user_text:
+        return
+    
+    st.session_state.processing_active = True
+    st.session_state.temp_user_input = ""   # clear right away
+
+    now_iso = datetime.now().isoformat()
+    st.session_state.chat_history.append({"user": user_text, "timestamp": now_iso})
+    append_to_conversation("user", user_text, st.session_state.session_id)
+
+    st.session_state.pending_user_message = user_text
+    st.rerun()
+
+with st.form(key="main_chat_form", clear_on_submit=True):
+    st.text_input(
+        "Ask me about plushies, pricing, shipping, or anything else! 🧸",
+        key="temp_user_input",
+        placeholder="Type your message…",
+        disabled=st.session_state.processing_active,
+        label_visibility="collapsed"
+    )
+    st.form_submit_button("Send", use_container_width=True, on_click=handle_chat_submit)
+
+# Process one pending message exactly once
+if "pending_user_message" in st.session_state:
+    to_process = st.session_state.pending_user_message
+    del st.session_state.pending_user_message   # crucial: prevent re-run
+
+    with st.spinner("Teddy is thinking... 🧸"):
+        process_message(to_process)
+    
+    st.rerun()
+
+# Show chat content
 if st.session_state.show_history:
     st.subheader("📜 Conversation History")
     if st.session_state.chat_history:
@@ -890,33 +905,11 @@ else:
     elif not st.session_state.show_quick_questions:
         st.info("💬 Start a conversation or click 'Quick Q's' for common questions!")
 
-# Process Input
-user_input = st.chat_input(
-    "Ask me about plushies, pricing, shipping, or anything else! 🧸",
-    disabled=st.session_state.processing_active
-)
-
-if st.session_state.selected_quick_question and not st.session_state.processing_active:
-    user_input = st.session_state.selected_quick_question
-    st.session_state.selected_quick_question = None
-
-if user_input and not st.session_state.processing_active:
-    logger.info(f"💬 Input received: {user_input}")
-    st.session_state.processing_active = True
-    append_to_conversation("user", user_input, st.session_state.session_id)
-    st.session_state.chat_history.append({"user": user_input, "timestamp": datetime.now().isoformat()})
-    st.rerun()
-
-if (st.session_state.chat_history and 
-    "user" in st.session_state.chat_history[-1] and 
-    st.session_state.processing_active):
-    process_message(st.session_state.chat_history[-1]["user"])
-
 # Footer
 st.markdown("""
 <br><hr>
 <center>
 <small style="color: #5A3A1B;">© 2025 TedPro by CuddleHeros Team 🧸</small><br>
-<small style="color: #FFA94D;">Professional Assistant v3.4 - Polished Edition</small>
+<small style="color: #FFA94D;">Professional Assistant v3.5 - Stabilized Edition</small>
 </center>
 """, unsafe_allow_html=True)
