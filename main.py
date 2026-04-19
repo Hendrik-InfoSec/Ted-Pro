@@ -71,14 +71,14 @@ st.markdown(f"""
 # --- 3. BACKEND INITIALIZATION (Restored from your code) ---
 @st.cache_resource
 def init_engine():
-    api_key = st.secrets.get("OPENROUTER_API_KEY")
-    sb_url = st.secrets.get("SUPABASE_URL")
-    sb_key = st.secrets.get("SUPABASE_KEY")
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    sb_url = os.environ.get("SUPABASE_URL")
+    sb_key = os.environ.get("SUPABASE_KEY")
     if not all([api_key, sb_url, sb_key]):
-        st.error("Missing API Keys in Secrets!")
+        st.error("Missing API Keys in Environment Variables! Check Render dashboard.")
         st.stop()
     return HybridEngine(api_key=api_key, supabase_url=sb_url, supabase_key=sb_key, client_id="tedpro_client")
-
+    
 engine = init_engine()
 
 if "session_id" not in st.session_state:
