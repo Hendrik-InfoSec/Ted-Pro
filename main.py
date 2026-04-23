@@ -4,6 +4,9 @@ from datetime import datetime, timedelta
 import uuid, time, hashlib, re, os, logging
 from typing import List, Dict, Optional
 from supabase import create_client, Client
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # --- 1. CONFIG & API SETUP ---
 st.set_page_config(
