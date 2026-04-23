@@ -306,6 +306,13 @@ except Exception as e:
     st.error(f"Failed to initialize engine: {e}")
     st.stop()
 
+# TEMPORARY DEBUG - Remove after fixing
+try:
+    test = engine.supabase.table('leads').select('id').limit(1).execute()
+    st.sidebar.success("✅ Supabase connected")
+except Exception as e:
+    st.sidebar.error(f"❌ Supabase error: {str(e)}")
+
 # Initialize session state
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
