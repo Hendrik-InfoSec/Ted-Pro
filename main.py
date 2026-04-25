@@ -364,7 +364,6 @@ def render_lead_capture():
     """Render lead capture banner - shows form or success message persistently"""
     with st.container():
         if not st.session_state.lead_captured or st.session_state.test_mode:
-            # Show the form
             st.markdown("""
                 <div class="lead-banner">
                     <h3>🍯 Join the Honey-Pot</h3>
@@ -387,7 +386,13 @@ def render_lead_capture():
                         if result:
                             st.session_state.lead_captured = True
                             st.success("✅ Welcome to the VIP Cuddlers club! Check your email for the secret catalog.")
-                            # DON'T rerun - let success message show in place
+                            # Link lead to session
+                            try:
+                                engine.supabase.table('leads').update({
+                                    'session_id': st.session_state.session_id
+                                }).eq('email', l_email).execute()
+                            except Exception as e:
+                                logging.error(f"Lead session link error: {e}")
                         else:
                             st.error("❌ Couldn't save your info. The email might already be registered.")
                     except Exception as e:
@@ -395,8 +400,23 @@ def render_lead_capture():
             elif submit:
                 st.warning("Please enter a valid email address 📧")
         else:
-            # Already captured - show persistent success
             st.success("✅ You're a VIP Cuddler! Check your email for the secret catalog.")
+
+# --- 6b. CONVERSATION SAVING ---
+def save_conversation(user_msg: str, bot_msg: str):
+    """Save conversation exchange to Supabase"""
+    try:
+        engine.supabase.table('conversations').insert({
+            'session_id': st.session_state.session_id,
+            'client_id': 'tedpro_client',
+            'user_message': user_msg,
+            'bot_response': bot_msg,
+            'created_at': datetime.now().isoformat(),
+            'metadata': {'source': 'main_chat'}
+        }).execute()
+    except Exception as e:
+        logging.error(f"Conversation save error: {e}")
+
 
 # --- 7. MAIN CHAT INTERFACE ---
 st.markdown("<div class='main-container'>", unsafe_allow_html=True)
@@ -482,7 +502,7 @@ with chat_container:
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-# Lead capture - always show banner area (form or success) after first exchange
+# Lead capture - always show banner area after first exchange
 if len(st.session_state.chat_history) >= 2:
     st.markdown("---")
     render_lead_capture()
@@ -515,10 +535,13 @@ if st.session_state.typing and st.session_state.chat_history:
                 "content": final_response, 
                 "time": get_teddy_time()
             })
+            # Save conversation to Supabase
+            save_conversation(last_msg["content"], final_response)
         except Exception as e:
+            error_msg = "I'm having trouble connecting right now. Please try again! 🧸"
             st.session_state.chat_history.append({
                 "role": "assistant", 
-                "content": "I'm having trouble connecting right now. Please try again! 🧸", 
+                "content": error_msg, 
                 "time": get_teddy_time()
             })
             logging.error(f"Chat error: {e}")
