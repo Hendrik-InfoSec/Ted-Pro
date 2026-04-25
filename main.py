@@ -361,9 +361,10 @@ with st.sidebar:
 
 # --- 6. LEAD CAPTURE COMPONENT ---
 def render_lead_capture():
-    """Render lead capture banner - can be placed anywhere"""
-    if not st.session_state.lead_captured or st.session_state.test_mode:
-        with st.container():
+    """Render lead capture banner - shows form or success message persistently"""
+    with st.container():
+        if not st.session_state.lead_captured or st.session_state.test_mode:
+            # Show the form
             st.markdown("""
                 <div class="lead-banner">
                     <h3>🍯 Join the Honey-Pot</h3>
@@ -380,19 +381,22 @@ def render_lead_capture():
                 submit = st.button("Get 10% Off 🎁", use_container_width=True, type="primary")
 
             if submit and l_email and "@" in l_email:
-                try:
-                    engine.add_lead(l_name, l_email, context="main_chat_v4")
-                    st.session_state.lead_captured = True
-                    st.success("✅ Check your inbox, friend! Welcome to the VIP Cuddlers club!")
-                    if not st.session_state.test_mode:
-                        time.sleep(2)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Oops! Couldn't save your info: {e}")
+                with st.spinner("Saving your info..."):
+                    try:
+                        result = engine.add_lead(l_name, l_email, context="main_chat_v4")
+                        if result:
+                            st.session_state.lead_captured = True
+                            st.success("✅ Welcome to the VIP Cuddlers club! Check your email for the secret catalog.")
+                            # DON'T rerun - let success message show in place
+                        else:
+                            st.error("❌ Couldn't save your info. The email might already be registered.")
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
             elif submit:
                 st.warning("Please enter a valid email address 📧")
-    else:
-        st.success("✅ You're a VIP Cuddler! Check your email for the secret catalog.")
+        else:
+            # Already captured - show persistent success
+            st.success("✅ You're a VIP Cuddler! Check your email for the secret catalog.")
 
 # --- 7. MAIN CHAT INTERFACE ---
 st.markdown("<div class='main-container'>", unsafe_allow_html=True)
@@ -478,8 +482,8 @@ with chat_container:
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-# Lead capture (shown after first message or can be triggered)
-if len(st.session_state.chat_history) >= 2 and not st.session_state.lead_captured:
+# Lead capture - always show banner area (form or success) after first exchange
+if len(st.session_state.chat_history) >= 2:
     st.markdown("---")
     render_lead_capture()
 
