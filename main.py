@@ -4,7 +4,9 @@ from datetime import datetime, timedelta
 import uuid, time, hashlib, re, os, logging
 from typing import List, Dict, Optional
 from supabase import create_client, Client
-import resend
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -360,41 +362,48 @@ with st.sidebar:
     st.markdown("---")
     st.caption("© 2024 CuddleHeros")
 
-# --- 6a. EMAIL SENDING ---
+# --- 6a. EMAIL SENDING (Gmail SMTP) ---
 def send_welcome_email(name: str, email: str) -> bool:
-    """Send welcome email with voucher via Resend"""
+    """Send welcome email with voucher via Gmail SMTP"""
     try:
-        resend_api_key = os.environ.get("RESEND_API_KEY")
-        if not resend_api_key:
-            logging.error("RESEND_API_KEY not found in environment variables")
-            return False
+        gmail_user = os.environ.get("GMAIL_USER")
+        gmail_password = os.environ.get("GMAIL_APP_PASSWORD")
 
-        resend.api_key = resend_api_key
+        if not gmail_user or not gmail_password:
+            logging.error("Gmail credentials not found in environment variables")
+            return False
 
         greeting_name = name if name and name.strip() else "Friend"
 
-        html_content = """<!DOCTYPE html>
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = "Welcome to the CuddleHeros VIP Club! 🧸"
+        msg['From'] = f"Teddy at CuddleHeros <{gmail_user}>"
+        msg['To'] = email
+
+        # HTML content
+        html_content = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Welcome to CuddleHeros</title>
     <style>
-        body { font-family: 'Quicksand', 'Helvetica Neue', Arial, sans-serif; background-color: #FFF9F4; margin: 0; padding: 0; color: #2D1B00; }
-        .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 40px rgba(45, 27, 0, 0.1); }
-        .header { background: linear-gradient(135deg, #FF922B 0%, #FF8C42 100%); padding: 40px 30px; text-align: center; }
-        .header h1 { color: white; margin: 0; font-size: 28px; font-weight: 700; }
-        .teddy-emoji { font-size: 60px; margin-bottom: 10px; }
-        .content { padding: 40px 30px; }
-        .greeting { font-size: 22px; font-weight: 600; margin-bottom: 20px; color: #2D1B00; }
-        .message { font-size: 16px; line-height: 1.6; color: #5A3A1B; margin-bottom: 30px; }
-        .voucher-box { background: linear-gradient(135deg, #FFF0DB 0%, #FFE4CC 100%); border: 2px dashed #FF922B; border-radius: 16px; padding: 30px; text-align: center; margin: 30px 0; }
-        .voucher-label { font-size: 14px; text-transform: uppercase; letter-spacing: 2px; color: #8B6914; margin-bottom: 10px; }
-        .voucher-code { font-size: 36px; font-weight: 700; color: #FF922B; letter-spacing: 3px; margin: 10px 0; }
-        .voucher-note { font-size: 13px; color: #8B6914; margin-top: 10px; }
-        .cta-button { display: inline-block; background: linear-gradient(135deg, #FF922B 0%, #FF8C42 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 30px; font-weight: 600; font-size: 16px; margin: 20px 0; box-shadow: 0 4px 15px rgba(255, 146, 43, 0.3); }
-        .footer { background: #FFF9F4; padding: 30px; text-align: center; font-size: 14px; color: #8B6914; }
-        .social { margin-top: 15px; font-size: 24px; }
+        body {{ font-family: 'Quicksand', 'Helvetica Neue', Arial, sans-serif; background-color: #FFF9F4; margin: 0; padding: 0; color: #2D1B00; }}
+        .container {{ max-width: 600px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 40px rgba(45, 27, 0, 0.1); }}
+        .header {{ background: linear-gradient(135deg, #FF922B 0%, #FF8C42 100%); padding: 40px 30px; text-align: center; }}
+        .header h1 {{ color: white; margin: 0; font-size: 28px; font-weight: 700; }}
+        .teddy-emoji {{ font-size: 60px; margin-bottom: 10px; }}
+        .content {{ padding: 40px 30px; }}
+        .greeting {{ font-size: 22px; font-weight: 600; margin-bottom: 20px; color: #2D1B00; }}
+        .message {{ font-size: 16px; line-height: 1.6; color: #5A3A1B; margin-bottom: 30px; }}
+        .voucher-box {{ background: linear-gradient(135deg, #FFF0DB 0%, #FFE4CC 100%); border: 2px dashed #FF922B; border-radius: 16px; padding: 30px; text-align: center; margin: 30px 0; }}
+        .voucher-label {{ font-size: 14px; text-transform: uppercase; letter-spacing: 2px; color: #8B6914; margin-bottom: 10px; }}
+        .voucher-code {{ font-size: 36px; font-weight: 700; color: #FF922B; letter-spacing: 3px; margin: 10px 0; }}
+        .voucher-note {{ font-size: 13px; color: #8B6914; margin-top: 10px; }}
+        .cta-button {{ display: inline-block; background: linear-gradient(135deg, #FF922B 0%, #FF8C42 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 30px; font-weight: 600; font-size: 16px; margin: 20px 0; box-shadow: 0 4px 15px rgba(255, 146, 43, 0.3); }}
+        .footer {{ background: #FFF9F4; padding: 30px; text-align: center; font-size: 14px; color: #8B6914; }}
+        .social {{ margin-top: 15px; font-size: 24px; }}
     </style>
 </head>
 <body>
@@ -404,7 +413,7 @@ def send_welcome_email(name: str, email: str) -> bool:
             <h1>Welcome to CuddleHeros!</h1>
         </div>
         <div class="content">
-            <div class="greeting">Hi """ + greeting_name + """! 👋</div>
+            <div class="greeting">Hi {greeting_name}! 👋</div>
             <div class="message">
                 Thanks for joining the Honey-Pot! We're so excited to help you find your perfect plushie companion.<br><br>
                 As a warm welcome, here's an exclusive voucher just for you:
@@ -431,15 +440,15 @@ def send_welcome_email(name: str, email: str) -> bool:
 </body>
 </html>"""
 
-        params = {
-            "from": "Teddy at CuddleHeros <onboarding@resend.dev>",
-            "to": [email],
-            "subject": "Welcome to the CuddleHeros VIP Club! 🧸",
-            "html": html_content,
-        }
+        # Attach HTML
+        msg.attach(MIMEText(html_content, 'html'))
 
-        response = resend.Emails.send(params)
-        logging.info(f"Welcome email sent to {email}: {response}")
+        # Send via Gmail SMTP
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(gmail_user, gmail_password)
+            server.sendmail(gmail_user, email, msg.as_string())
+
+        logging.info(f"Welcome email sent to {email} via Gmail SMTP")
         return True
 
     except Exception as e:
@@ -473,12 +482,12 @@ def render_lead_capture():
                         result = engine.add_lead(l_name, l_email, context="main_chat_v4")
                         if result:
                             st.session_state.lead_captured = True
-                            # Send welcome email with voucher
+                            # Send welcome email with voucher via Gmail
                             email_sent = send_welcome_email(l_name, l_email)
                             if email_sent:
                                 st.success("✅ Welcome to the VIP Cuddlers club! Check your inbox for your voucher! 🎁")
                             else:
-                                st.warning("✅ Lead saved, but email couldn't be sent. We'll try again soon!")
+                                st.warning("✅ Lead saved, but email couldn't be sent. Please check your spam folder or contact support.")
                         else:
                             st.error("❌ Couldn't save your info. The email might already be registered.")
                     except Exception as e:
@@ -606,6 +615,7 @@ if st.session_state.typing and st.session_state.chat_history:
                 "time": get_teddy_time()
             })
         except Exception as e:
+            
             st.session_state.chat_history.append({
                 "role": "assistant", 
                 "content": "I'm having trouble connecting right now. Please try again! 🧸", 
