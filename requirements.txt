@@ -5,4 +5,3 @@ rich>=13.0.0
 supabase>=2.0.0
 postgrest>=0.10.0
 python-dotenv>=1.0.0
-resend
