@@ -19,16 +19,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"  # Start collapsed to maximize chat space
 )
 
-# --- QUERY PARAM REDIRECTS (for old URLs) ---
-# Handles ?admin=true and ?dev=true from your old links
-query_params = st.query_params
-if query_params.get("admin") == "true":
-    st.markdown('<meta http-equiv="refresh" content="0;url=/📊_Dashboard">', unsafe_allow_html=True)
-    st.stop()
-elif query_params.get("dev") == "true":
-    st.markdown('<meta http-equiv="refresh" content="0;url=/🔧_Dev_Tools">', unsafe_allow_html=True)
-    st.stop()
-
 # Timezone Fix
 LOCAL_OFFSET_HOURS = 2
 
