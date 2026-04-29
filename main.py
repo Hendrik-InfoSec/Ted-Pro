@@ -19,6 +19,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed"  # Start collapsed to maximize chat space
 )
 
+# --- QUERY PARAM REDIRECTS ---
+query_params = st.query_params
+if query_params.get("admin") == "true":
+    st.switch_page("pages/Dashboard.py")
+elif query_params.get("dev") == "true":
+    st.switch_page("pages/Dev_Tools.py")
+
 # Timezone Fix
 LOCAL_OFFSET_HOURS = 2
 
