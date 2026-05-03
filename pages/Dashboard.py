@@ -65,6 +65,14 @@ st.markdown("""
         text-transform: uppercase;
         letter-spacing: 1px;
     }
+    .upload-area {
+        background: white;
+        border: 2px dashed #FF922B;
+        border-radius: 16px;
+        padding: 40px;
+        text-align: center;
+        margin: 20px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -77,12 +85,13 @@ try:
     leads_count = len(supabase.table('leads').select('id', count='exact').execute().data)
     conv_count = len(supabase.table('conversations').select('id', count='exact').execute().data)
     cache_count = len(supabase.table('qa_cache').select('id', count='exact').execute().data)
+    products_count = len(supabase.table('products').select('id', count='exact').execute().data)
 
     # Today's leads
     today = datetime.now().date().isoformat()
     today_leads = len(supabase.table('leads').select('id').gte('timestamp', today).execute().data)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.markdown(f"""
             <div class="metric-card">
@@ -111,6 +120,13 @@ try:
                 <div class="metric-label">Cached Q&A</div>
             </div>
         """, unsafe_allow_html=True)
+    with col5:
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value">{products_count}</div>
+                <div class="metric-label">Products</div>
+            </div>
+        """, unsafe_allow_html=True)
 
 except Exception as e:
     st.error(f"Error loading metrics: {e}")
@@ -118,7 +134,7 @@ except Exception as e:
 st.markdown("---")
 
 # --- TABS ---
-tab1, tab2, tab3 = st.tabs(["📝 Leads", "💬 Conversations", "📈 Analytics"])
+tab1, tab2, tab3, tab4 = st.tabs(["📝 Leads", "💬 Conversations", "📦 Products", "📈 Analytics"])
 
 with tab1:
     st.markdown("### Recent Leads")
@@ -158,6 +174,77 @@ with tab2:
         st.error(f"Error loading conversations: {e}")
 
 with tab3:
+    st.markdown("### 📦 Product Catalog")
+
+    # CSV Upload Section
+    with st.container():
+        st.markdown("""
+            <div class="upload-area">
+                <h3>📤 Upload Product Catalog</h3>
+                <p>Upload a CSV file with your products. Required columns: name, price</p>
+                <p>Optional: category, description, material, size_cm, in_stock, customisable, sku</p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        uploaded_file = st.file_uploader("Choose CSV file", type=['csv'], key="product_csv")
+
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file)
+                st.success(f"✅ Loaded {len(df)} products from CSV")
+                st.write("Preview:")
+                st.dataframe(df.head(), use_container_width=True)
+
+                if st.button("💾 Save to Database", type="primary"):
+                    with st.spinner("Saving products..."):
+                        # Clear existing products for this client
+                        supabase.table('products').delete().eq('client_id', 'tedpro_client').execute()
+
+                        # Insert new products
+                        products = []
+                        for _, row in df.iterrows():
+                            product = {
+                                'client_id': 'tedpro_client',
+                                'name': str(row.get('name', '')),
+                                'category': str(row.get('category', '')),
+                                'price': float(row.get('price', 0)) if pd.notna(row.get('price')) else 0,
+                                'currency': str(row.get('currency', 'ZAR')),
+                                'in_stock': bool(row.get('in_stock', True)),
+                                'description': str(row.get('description', '')),
+                                'material': str(row.get('material', '')),
+                                'size_cm': int(row.get('size_cm', 0)) if pd.notna(row.get('size_cm')) else 0,
+                                'customisable': bool(row.get('customisable', False)),
+                                'sku': str(row.get('sku', '')),
+                            }
+                            products.append(product)
+
+                        # Batch insert
+                        supabase.table('products').insert(products).execute()
+                        st.success(f"✅ {len(products)} products saved!")
+                        st.rerun()
+
+            except Exception as e:
+                st.error(f"Error processing CSV: {e}")
+
+    # Show current products
+    st.markdown("---")
+    st.markdown("### Current Products")
+    try:
+        products = supabase.table('products').select('*').order('name').execute()
+        if products.data:
+            df = pd.DataFrame(products.data)
+            df = df[['name', 'category', 'price', 'currency', 'in_stock', 'sku']]
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+            # Download current catalog
+            csv = df.to_csv(index=False)
+            st.download_button("📥 Download Current Catalog", csv, "products.csv", "text/csv")
+        else:
+            st.info("No products in catalog yet. Upload a CSV above.")
+    except Exception as e:
+        st.error(f"Error loading products: {e}")
+
+with tab4:
     st.markdown("### Popular Questions")
     try:
         cache = supabase.table('qa_cache').select('*').order('hit_count', desc=True).limit(20).execute()
