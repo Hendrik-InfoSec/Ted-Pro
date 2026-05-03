@@ -19,13 +19,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"  # Start collapsed to maximize chat space
 )
 
-# --- QUERY PARAM REDIRECTS ---
-query_params = st.query_params
-if query_params.get("admin") == "true":
-    st.switch_page("pages/Dashboard.py")
-elif query_params.get("dev") == "true":
-    st.switch_page("pages/Dev_Tools.py")
-
 # Timezone Fix
 LOCAL_OFFSET_HOURS = 2
 
@@ -612,8 +605,34 @@ if st.session_state.typing and st.session_state.chat_history:
         time.sleep(0.5)
 
         try:
+            user_query = last_msg["content"]
+
+            # Check if query is product-related
+            product_keywords = ['have', 'stock', 'buy', 'price', 'cost', 'plushie', 'teddy', 'bear', 'unicorn', 
+                              'dinosaur', 'bunny', 'custom', 'order', 'catalog', 'shop', 'available']
+            is_product_query = any(kw in user_query.lower() for kw in product_keywords)
+
+            product_context = ""
+            if is_product_query:
+                # Search products
+                products = engine.search_products(user_query, max_results=5)
+                if products:
+                    product_context = "
+
+[PRODUCT INFO]
+" + engine.format_product_response(products)
+                    product_context += "
+Use this product information to help the customer. Mention specific items, prices, and features."
+
+            # Build enhanced query with product context
+            enhanced_query = user_query
+            if product_context:
+                enhanced_query = f"{user_query}
+
+{product_context}"
+
             with st.spinner(""):
-                raw_response = "".join([chunk for chunk in engine.stream_answer(last_msg["content"])])
+                raw_response = "".join([chunk for chunk in engine.stream_answer(enhanced_query)])
                 final_response = apply_teddy_vibes(raw_response)
 
             st.session_state.chat_history.append({
