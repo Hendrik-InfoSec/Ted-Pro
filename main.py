@@ -617,19 +617,13 @@ if st.session_state.typing and st.session_state.chat_history:
                 # Search products
                 products = engine.search_products(user_query, max_results=5)
                 if products:
-                    product_context = "
-
-[PRODUCT INFO]
-" + engine.format_product_response(products)
-                    product_context += "
-Use this product information to help the customer. Mention specific items, prices, and features."
+                    product_context = "\n\n[PRODUCT INFO]\n" + engine.format_product_response(products)
+                    product_context += "\nUse this product information to help the customer. Mention specific items, prices, and features."
 
             # Build enhanced query with product context
             enhanced_query = user_query
             if product_context:
-                enhanced_query = f"{user_query}
-
-{product_context}"
+                enhanced_query = user_query + "\n\n" + product_context
 
             with st.spinner(""):
                 raw_response = "".join([chunk for chunk in engine.stream_answer(enhanced_query)])
