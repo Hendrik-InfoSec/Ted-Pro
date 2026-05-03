@@ -4,13 +4,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 import os
 
-st.set_page_config(
-    page_title="TedPro Admin Dashboard 📊",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
-
 # --- AUTH CHECK ---
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "tedpro2024")
 
