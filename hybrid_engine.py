@@ -144,6 +144,55 @@ class HybridEngine:
             self.logger.error(f"Lead capture error: {e}")
             return False
 
+    # --- PRODUCT SEARCH METHODS ---
+    def search_products(self, query: str, max_results: int = 5) -> list:
+        """Search products by keyword in name, category, or description"""
+        try:
+            query = query.lower().strip()
+
+            # Search in Supabase using ILIKE for partial matches
+            results = self.supabase.table('products').select('*').eq('client_id', self.client_id).or_(
+                f"name.ilike.%{query}%,category.ilike.%{query}%,description.ilike.%{query}%"
+            ).eq('in_stock', True).limit(max_results).execute()
+
+            return results.data if results.data else []
+
+        except Exception as e:
+            self.logger.error(f"Product search error: {e}")
+            return []
+
+    def format_product_response(self, products: list) -> str:
+        """Format products into a nice response for Teddy"""
+        if not products:
+            return "I don't have any products matching that description in stock right now."
+
+        response = "Here are some options I found:
+
+"
+        for i, p in enumerate(products, 1):
+            price = f"{p.get('currency', 'ZAR')} {p.get('price', 0):.2f}"
+            name = p.get('name', 'Unknown')
+            desc = p.get('description', '')[:100]
+            material = p.get('material', '')
+            size = f"{p.get('size_cm', 0)}cm" if p.get('size_cm') else ''
+            custom = "✨ Customisable" if p.get('customisable') else ''
+
+            response += f"**{i}. {name}** — {price}
+"
+            if desc:
+                response += f"   {desc}
+"
+            if material or size:
+                response += f"   *{material} {size}*
+"
+            if custom:
+                response += f"   {custom}
+"
+            response += "
+"
+
+        return response
+
     def load_common_faqs(self, faqs: Dict[str, str]) -> bool:
         """Pre-load common FAQs into cache"""
         try:
