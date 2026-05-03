@@ -166,9 +166,7 @@ class HybridEngine:
         if not products:
             return "I don't have any products matching that description in stock right now."
 
-        response = "Here are some options I found:
-
-"
+        response = "Here are some options I found:" + chr(10) + chr(10)
         for i, p in enumerate(products, 1):
             price = f"{p.get('currency', 'ZAR')} {p.get('price', 0):.2f}"
             name = p.get('name', 'Unknown')
@@ -177,19 +175,14 @@ class HybridEngine:
             size = f"{p.get('size_cm', 0)}cm" if p.get('size_cm') else ''
             custom = "✨ Customisable" if p.get('customisable') else ''
 
-            response += f"**{i}. {name}** — {price}
-"
+            response += f"**{i}. {name}** — {price}" + chr(10)
             if desc:
-                response += f"   {desc}
-"
+                response += f"   {desc}" + chr(10)
             if material or size:
-                response += f"   *{material} {size}*
-"
+                response += f"   *{material} {size}*" + chr(10)
             if custom:
-                response += f"   {custom}
-"
-            response += "
-"
+                response += f"   {custom}" + chr(10)
+            response += chr(10)
 
         return response
 
