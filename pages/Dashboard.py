@@ -4,7 +4,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 import os
 
-
 # --- AUTH CHECK ---
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "tedpro2024")
 
