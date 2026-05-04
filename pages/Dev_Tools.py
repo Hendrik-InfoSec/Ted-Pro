@@ -3,7 +3,6 @@ from supabase import create_client, Client
 import os
 import requests
 
-
 # --- AUTH CHECK ---
 DEV_PASSWORD = os.environ.get("DEV_PASSWORD", "tedprodev2024")
 
