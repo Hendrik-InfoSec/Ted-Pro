@@ -12,6 +12,17 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # --- 1. CONFIG & API SETUP ---
+
+# --- EXPLICIT PAGE NAVIGATION (Fix for Render deployment) ---
+dashboard_page = st.Page("pages/Dashboard.py", title="Dashboard", icon="📊")
+dev_tools_page = st.Page("pages/Dev_Tools.py", title="Dev Tools", icon="🔧")
+chat_page = st.Page("main.py", title="TedPro Assistant", icon="🧸", default=True)
+
+pg = st.navigation([chat_page, dashboard_page, dev_tools_page])
+pg.run()
+
+# --- END NAVIGATION ---
+
 st.set_page_config(
     page_title="TedPro Marketing Assistant 🧸",
     page_icon="🧸",
