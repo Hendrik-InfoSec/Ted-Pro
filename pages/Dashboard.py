@@ -12,16 +12,17 @@ if "admin_authenticated" not in st.session_state:
 
 if not st.session_state.admin_authenticated:
     st.markdown("# 🔐 Admin Access")
-    with st.form("admin_login"):
+    with st.form("admin_login", border=False):
         password = st.text_input("Enter admin password", type="password")
-        submit = st.form_submit_button("Login")
-        if submit:
-            if password == ADMIN_PASSWORD:
-                st.session_state.admin_authenticated = True
-                st.rerun()
-            else:
-                st.error("Incorrect password")
+        submitted = st.form_submit_button("Login")
+    if submitted:
+        if password == ADMIN_PASSWORD:
+            st.session_state.admin_authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password")
     st.stop()
+    
 # --- SUPABASE CONNECTION ---
 @st.cache_resource
 def get_supabase():
