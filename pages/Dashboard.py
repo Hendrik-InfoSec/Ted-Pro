@@ -12,15 +12,30 @@ if "admin_authenticated" not in st.session_state:
 
 if not st.session_state.admin_authenticated:
     st.markdown("# 🔐 Admin Access")
-    with st.form("admin_login", border=False):
-        password = st.text_input("Enter admin password", type="password")
-        submitted = st.form_submit_button("Login")
-    if submitted:
+    
+    # Callback function triggered on Enter or blur
+    def try_login():
+        st.session_state.login_attempted = True
+    
+    password = st.text_input(
+        "Enter admin password (press Enter)",
+        type="password",
+        key="admin_pw_input",
+        on_change=try_login
+    )
+    
+    if st.session_state.get("login_attempted"):
         if password == ADMIN_PASSWORD:
             st.session_state.admin_authenticated = True
+            del st.session_state.login_attempted
             st.rerun()
         else:
             st.error("Incorrect password")
+            del st.session_state.login_attempted
+            # Clear the password field
+            st.session_state.admin_pw_input = ""
+            st.rerun()
+    
     st.stop()
     
 # --- SUPABASE CONNECTION ---
