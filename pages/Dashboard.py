@@ -69,7 +69,8 @@ st.markdown("""
         margin: 20px 0;
     }
    
-    div[data-testid="stForm"] small {display: none !important;}
+div[data-testid="stFormSubmitButton"] ~ div {display: none !important;}
+
 </style>
 """, unsafe_allow_html=True)
 
