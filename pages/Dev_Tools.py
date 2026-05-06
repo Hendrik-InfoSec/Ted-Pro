@@ -15,6 +15,9 @@ if not st.session_state.dev_authenticated:
     if "dev_pw_counter" not in st.session_state:
         st.session_state.dev_pw_counter = 0
     
+    if st.session_state.get("dev_login_error"):
+        st.error("Incorrect password. Please try again.")
+    
     def try_login():
         st.session_state.dev_login_attempted = True
     
@@ -28,12 +31,13 @@ if not st.session_state.dev_authenticated:
     if st.session_state.get("dev_login_attempted"):
         if password == DEV_PASSWORD:
             st.session_state.dev_authenticated = True
-            del st.session_state.dev_login_attempted
+            for key in ["dev_login_attempted", "dev_login_error", "dev_pw_counter"]:
+                st.session_state.pop(key, None)
             st.rerun()
         else:
-            st.error("Incorrect password")
-            del st.session_state.dev_login_attempted
+            st.session_state.dev_login_error = True
             st.session_state.dev_pw_counter += 1
+            del st.session_state.dev_login_attempted
             st.rerun()
     
     st.stop()
