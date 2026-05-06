@@ -13,14 +13,17 @@ if "admin_authenticated" not in st.session_state:
 if not st.session_state.admin_authenticated:
     st.markdown("# 🔐 Admin Access")
     
-    # Callback function triggered on Enter or blur
+    # Use a counter to generate a new key on failed attempts (clears the input)
+    if "admin_pw_counter" not in st.session_state:
+        st.session_state.admin_pw_counter = 0
+    
     def try_login():
         st.session_state.login_attempted = True
     
     password = st.text_input(
         "Enter admin password (press Enter)",
         type="password",
-        key="admin_pw_input",
+        key=f"admin_pw_{st.session_state.admin_pw_counter}",
         on_change=try_login
     )
     
@@ -32,8 +35,8 @@ if not st.session_state.admin_authenticated:
         else:
             st.error("Incorrect password")
             del st.session_state.login_attempted
-            # Clear the password field
-            st.session_state.admin_pw_input = ""
+            # Increment counter to force a new widget key (clears the field)
+            st.session_state.admin_pw_counter += 1
             st.rerun()
     
     st.stop()
