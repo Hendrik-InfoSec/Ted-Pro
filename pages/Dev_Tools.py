@@ -12,13 +12,16 @@ if "dev_authenticated" not in st.session_state:
 if not st.session_state.dev_authenticated:
     st.markdown("# 🔐 Developer Access")
     
+    if "dev_pw_counter" not in st.session_state:
+        st.session_state.dev_pw_counter = 0
+    
     def try_login():
         st.session_state.dev_login_attempted = True
     
     password = st.text_input(
         "Enter dev password (press Enter)",
         type="password",
-        key="dev_pw_input",
+        key=f"dev_pw_{st.session_state.dev_pw_counter}",
         on_change=try_login
     )
     
@@ -30,7 +33,7 @@ if not st.session_state.dev_authenticated:
         else:
             st.error("Incorrect password")
             del st.session_state.dev_login_attempted
-            st.session_state.dev_pw_input = ""
+            st.session_state.dev_pw_counter += 1
             st.rerun()
     
     st.stop()
