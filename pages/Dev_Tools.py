@@ -11,15 +11,30 @@ if "dev_authenticated" not in st.session_state:
 
 if not st.session_state.dev_authenticated:
     st.markdown("# 🔐 Developer Access")
-    password = st.text_input("Enter dev password", type="password")
-    if st.button("Login"):
+    
+    def try_login():
+        st.session_state.dev_login_attempted = True
+    
+    password = st.text_input(
+        "Enter dev password (press Enter)",
+        type="password",
+        key="dev_pw_input",
+        on_change=try_login
+    )
+    
+    if st.session_state.get("dev_login_attempted"):
         if password == DEV_PASSWORD:
             st.session_state.dev_authenticated = True
+            del st.session_state.dev_login_attempted
             st.rerun()
         else:
             st.error("Incorrect password")
+            del st.session_state.dev_login_attempted
+            st.session_state.dev_pw_input = ""
+            st.rerun()
+    
     st.stop()
-
+    
 # --- STYLING ---
 st.markdown("""
 <style>
