@@ -13,9 +13,12 @@ if "admin_authenticated" not in st.session_state:
 if not st.session_state.admin_authenticated:
     st.markdown("# 🔐 Admin Access")
     
-    # Use a counter to generate a new key on failed attempts (clears the input)
     if "admin_pw_counter" not in st.session_state:
         st.session_state.admin_pw_counter = 0
+    
+    # Show error from previous attempt before rendering the input
+    if st.session_state.get("admin_login_error"):
+        st.error("Incorrect password. Please try again.")
     
     def try_login():
         st.session_state.login_attempted = True
@@ -29,14 +32,16 @@ if not st.session_state.admin_authenticated:
     
     if st.session_state.get("login_attempted"):
         if password == ADMIN_PASSWORD:
+            # Success — clean up and go
             st.session_state.admin_authenticated = True
-            del st.session_state.login_attempted
+            for key in ["login_attempted", "admin_login_error", "admin_pw_counter"]:
+                st.session_state.pop(key, None)
             st.rerun()
         else:
-            st.error("Incorrect password")
-            del st.session_state.login_attempted
-            # Increment counter to force a new widget key (clears the field)
+            # Set error flag, increment counter to clear field, rerun
+            st.session_state.admin_login_error = True
             st.session_state.admin_pw_counter += 1
+            del st.session_state.login_attempted
             st.rerun()
     
     st.stop()
