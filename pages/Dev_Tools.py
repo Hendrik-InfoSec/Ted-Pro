@@ -3,6 +3,13 @@ from supabase import create_client, Client
 import os
 import requests
 
+st.set_page_config(
+    page_title="TedPro Dev Tools 🔧",
+    page_icon="🔧",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # --- AUTH CHECK ---
 DEV_PASSWORD = os.environ.get("DEV_PASSWORD", "tedprodev2024")
 
