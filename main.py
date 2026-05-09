@@ -327,12 +327,6 @@ except Exception as e:
     st.error(f"Failed to initialize engine: {e}")
     st.stop()
 
-# TEMPORARY DEBUG - Remove after fixing
-try:
-    test = engine.supabase.table('leads').select('id').limit(1).execute()
-    st.sidebar.success("✅ Supabase connected")
-except Exception as e:
-    st.sidebar.error(f"❌ Supabase error: {str(e)}")
 
 # Initialize session state
 if "session_id" not in st.session_state:
@@ -354,28 +348,6 @@ def apply_teddy_vibes(text: str) -> str:
     if "price" in text.lower() or "cost" in text.lower():
         text = "I've sniffed out the best value for you! " + text
     return f"{text}\n\n*{warm_closers[int(time.time()) % len(warm_closers)]}*"
-
-# --- 5. SIDEBAR (Clean & Minimal) ---
-with st.sidebar:
-    st.markdown("# 🧸 TedPro")
-    st.caption("Professional Plushie Assistant")
-    st.markdown("---")
-
-    # Dev toggle for testing
-    with st.expander("🔧 Dev Tools"):
-        st.session_state.test_mode = st.toggle("Test Mode", value=st.session_state.test_mode)
-        if st.session_state.test_mode:
-            st.info("Lead capture form will stay visible after submission")
-            if st.button("Reset Lead Status"):
-                st.session_state.lead_captured = False
-                st.rerun()
-
-        if st.button("🗑️ Clear Chat", use_container_width=True):
-            st.session_state.chat_history = []
-            st.rerun()
-
-    st.markdown("---")
-    st.caption("© 2024 CuddleHeros")
 
 # --- 6a. EMAIL SENDING (Gmail SMTP) ---
 def send_welcome_email(name: str, email: str) -> bool:
