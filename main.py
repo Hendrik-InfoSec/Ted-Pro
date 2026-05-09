@@ -20,19 +20,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Sidebar toggle for multi-page use ---
-# This runs once per session to set up the sidebar state tracking
-if "dev_mode_sidebar" not in st.session_state:
-    st.session_state.dev_mode_sidebar = False
-
-# If we came from Dev Tools, expand the sidebar via JS
-if st.session_state.dev_mode_sidebar:
-    st.markdown("""
-    <script>
-        // Expand sidebar on page load
-        window.parent.document.querySelector('[data-testid="stSidebar"]').style.display = 'block';
-    </script>
-    """, unsafe_allow_html=True)
 
 # Timezone Fix
 LOCAL_OFFSET_HOURS = 2
