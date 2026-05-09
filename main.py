@@ -17,7 +17,7 @@ st.set_page_config(
     page_title="TedPro Marketing Assistant 🧸",
     page_icon="🧸",
     layout="wide",
-    # initial_sidebar_state removed - sidebar now visible for page navigation
+    initial_sidebar_state="collapsed"
 )
 
 # Timezone Fix
