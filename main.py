@@ -3,51 +3,26 @@ import uuid
 import time
 import smtplib
 import logging
-from functools import lru_cache
+import hashlib
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 import pandas as pd
 
 from hybrid_engine import HybridEngine
 
-# ---------------------------------------------------
-# LOGGING
-# ---------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------
-# APP SETUP
-# ---------------------------------------------------
 app = FastAPI(title="TedPro Assistant", version="2.0.0")
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=os.environ.get("SECRET_KEY", "tedpro-secret-key-change-in-production")
-)
-
-templates = Jinja2Templates(directory="templates")
-templates.env.cache = None  # Fix Python 3.14 Jinja2 cache bug
-
-# Auto-create static directory if missing
-os.makedirs("static", exist_ok=True)
-
-# Static files
+app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SECRET_KEY", "tedpro-secret-key-change-in-production"))
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ---------------------------------------------------
-# ENGINE INITIALIZATION (lazy - prevents startup crash)
-# ---------------------------------------------------
 _engine = None
 
 def get_engine():
@@ -62,17 +37,9 @@ def get_engine():
             if not sb_url: missing.append("SUPABASE_URL")
             if not sb_key: missing.append("SUPABASE_KEY")
             raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
-        _engine = HybridEngine(
-            api_key=api_key,
-            supabase_url=sb_url,
-            supabase_key=sb_key,
-            client_id="tedpro_client"
-        )
+        _engine = HybridEngine(api_key=api_key, supabase_url=sb_url, supabase_key=sb_key, client_id="tedpro_client")
     return _engine
 
-# ---------------------------------------------------
-# HELPERS
-# ---------------------------------------------------
 LOCAL_OFFSET_HOURS = 2
 
 def get_teddy_time():
@@ -81,12 +48,7 @@ def get_teddy_time():
     return local_now.strftime("%H:%M")
 
 def apply_teddy_vibes(text: str) -> str:
-    warm_closers = [
-        "Paws and hugs, Teddy 🧸",
-        "Stay cozy! 🍯",
-        "Waiting for your next question! ✨",
-        "Teddy out! 🐾"
-    ]
+    warm_closers = ["Paws and hugs, Teddy 🧸", "Stay cozy! 🍯", "Waiting for your next question! ✨", "Teddy out! 🐾"]
     if "price" in text.lower() or "cost" in text.lower():
         text = "I've sniffed out the best value for you! " + text
     return f"{text}\n\n*{warm_closers[int(time.time()) % len(warm_closers)]}*"
@@ -104,22 +66,19 @@ def send_welcome_email(name: str, email: str) -> bool:
         msg['From'] = gmail_user
         msg['To'] = email
         html_content = f"""
-        <html>
-        <body style="font-family:sans-serif;background:#FFF9F4;padding:20px;">
-            <div style="max-width:600px;margin:0 auto;background:white;padding:30px;border-radius:20px;">
-                <div style="text-align:center;font-size:60px;">🧸</div>
-                <h1 style="color:#2D1B00;">Welcome {greeting_name}!</h1>
-                <p style="color:#5A3A1B;">Thanks for joining the Honey-Pot! We're excited to help you find your perfect plushie.</p>
-                <div style="background:#FFE4CC;padding:20px;border-radius:12px;text-align:center;margin:20px 0;">
-                    <p style="color:#8B6914;text-transform:uppercase;letter-spacing:2px;">Your Exclusive Voucher</p>
-                    <h2 style="color:#FF922B;font-size:36px;">TEDDY10</h2>
-                    <p style="color:#8B6914;">10% OFF your first order</p>
-                </div>
-                <a href="https://cuddleheros.com/shop" style="display:inline-block;background:#FF922B;color:white;padding:16px 40px;border-radius:30px;text-decoration:none;font-weight:600;">Shop the Catalog 🛍️</a>
-                <p style="margin-top:30px;color:#8B6914;">Paws and hugs,<br><strong>Teddy 🧸</strong></p>
-            </div>
-        </body>
-        </html>
+        <html><body style="font-family:sans-serif;background:#FFF9F4;padding:20px;">
+        <div style="max-width:600px;margin:0 auto;background:white;padding:30px;border-radius:20px;">
+        <div style="text-align:center;font-size:60px;">🧸</div>
+        <h1 style="color:#2D1B00;">Welcome {greeting_name}!</h1>
+        <p style="color:#5A3A1B;">Thanks for joining the Honey-Pot!</p>
+        <div style="background:#FFE4CC;padding:20px;border-radius:12px;text-align:center;margin:20px 0;">
+        <p style="color:#8B6914;text-transform:uppercase;letter-spacing:2px;">Your Exclusive Voucher</p>
+        <h2 style="color:#FF922B;font-size:36px;">TEDDY10</h2>
+        <p style="color:#8B6914;">10% OFF your first order</p>
+        </div>
+        <a href="https://cuddleheros.com/shop" style="display:inline-block;background:#FF922B;color:white;padding:16px 40px;border-radius:30px;text-decoration:none;font-weight:600;">Shop the Catalog 🛍️</a>
+        <p style="margin-top:30px;color:#8B6914;">Paws and hugs,<br><strong>Teddy 🧸</strong></p>
+        </div></body></html>
         """
         msg.attach(MIMEText(html_content, 'html'))
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
@@ -131,9 +90,6 @@ def send_welcome_email(name: str, email: str) -> bool:
         logger.error(f"Email send failed: {e}")
         return False
 
-# ---------------------------------------------------
-# SESSION INITIALIZATION
-# ---------------------------------------------------
 def init_session(request: Request):
     if "session_id" not in request.session:
         request.session["session_id"] = str(uuid.uuid4())
@@ -142,67 +98,88 @@ def init_session(request: Request):
     if "lead_captured" not in request.session:
         request.session["lead_captured"] = False
 
-# ---------------------------------------------------
-# AUTH
-# ---------------------------------------------------
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+DEV_PASSWORD = os.environ.get("DEV_PASSWORD")
 if not ADMIN_PASSWORD:
     logger.warning("ADMIN_PASSWORD not set - admin access disabled")
     ADMIN_PASSWORD = "__DISABLED__" + os.urandom(16).hex()
-DEV_PASSWORD = os.environ.get("DEV_PASSWORD")
 if not DEV_PASSWORD:
     logger.warning("DEV_PASSWORD not set - dev access disabled")
     DEV_PASSWORD = "__DISABLED__" + os.urandom(16).hex()
 
-# ---------------------------------------------------
-# ROUTES - MAIN CHAT
-# ---------------------------------------------------
+BASE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<script src="https://unpkg.com/htmx.org@2.0.8"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body {{ font-family: 'Quicksand', sans-serif; background: #FFF9F4; }}
+.teddy-gradient {{ background: linear-gradient(135deg, #FF922B 0%, #FF8C42 50%, #FFD5A5 100%); }}
+@keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+.fade-in {{ animation: fadeIn 0.3s ease-in; }}
+@keyframes float {{ 0%,100% {{ transform: translateY(0); }} 50% {{ transform: translateY(-10px); }} }}
+.float-anim {{ animation: float 3s ease-in-out infinite; }}
+.chat-wrapper {{ max-height: calc(100vh - 280px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: #FFD5A5 transparent; }}
+.chat-wrapper::-webkit-scrollbar {{ width: 6px; }}
+.chat-wrapper::-webkit-scrollbar-track {{ background: transparent; }}
+.chat-wrapper::-webkit-scrollbar-thumb {{ background: #FFD5A5; border-radius: 3px; }}
+</style>
+</head>
+<body class="min-h-screen bg-[#FFF9F4]">
+{content}
+</body>
+</html>"""
+
+def render_base(title: str, content: str) -> str:
+    return BASE_HTML.format(title=title, content=content)
+
 @app.get("/", response_class=HTMLResponse)
 async def chat_page(request: Request):
     init_session(request)
     chat_history = request.session.get("chat_history", [])
     lead_captured = request.session.get("lead_captured", False)
     show_lead = len(chat_history) >= 2 and not lead_captured
-    
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "chat_history": chat_history,
-        "lead_captured": lead_captured,
-        "show_lead": show_lead
-    })
+
+    messages_html = ""
+    for msg in chat_history:
+        if msg["role"] == "user":
+            messages_html += f'<div class="flex justify-end fade-in"><div class="flex items-end gap-2 max-w-[70%]"><div class="bg-gradient-to-br from-[#FF922B] to-[#FF8C42] text-white px-5 py-4 rounded-2xl rounded-br-md shadow-md"><p class="text-sm leading-relaxed">{msg["content"]}</p><p class="text-xs opacity-60 text-right mt-2">{msg.get("time", "")}</p></div><div class="w-9 h-9 rounded-full bg-[#FF922B] flex items-center justify-center text-white flex-shrink-0">👤</div></div></div>'
+        else:
+            messages_html += f'<div class="flex justify-start fade-in"><div class="flex items-end gap-2 max-w-[70%]"><div class="w-9 h-9 rounded-full bg-[#FFE4CC] flex items-center justify-center flex-shrink-0">🧸</div><div class="bg-white border border-[#FFE4CC] px-5 py-4 rounded-2xl rounded-bl-md shadow-md"><p class="text-sm leading-relaxed text-[#2D1B00]">{msg["content"]}</p><p class="text-xs text-[#8B6914] mt-2">{msg.get("time", "")}</p></div></div></div>'
+
+    lead_html = ""
+    if show_lead:
+        lead_html = '<div id="lead-capture" class="bg-gradient-to-br from-[#FFF0E0] to-[#FFE4CC] border-2 border-[#FFD5A5] rounded-2xl p-5 mb-4 fade-in shadow-md"><div class="flex items-center gap-2 mb-3"><span class="text-2xl">🎁</span><h3 class="font-bold text-[#2D1B00]">Join the VIP Cuddlers Club!</h3></div><p class="text-sm text-[#5A3A1B] mb-4">Get <strong>10% OFF</strong> your first order!</p><form hx-post="/lead" hx-target="#lead-capture" hx-swap="outerHTML" class="space-y-3"><input type="text" name="lead_name" placeholder="Your Name" class="w-full px-4 py-3 rounded-xl border border-[#FFD5A5] bg-white focus:outline-none focus:ring-2 focus:ring-[#FF922B] text-[#2D1B00]"><input type="email" name="lead_email" placeholder="your@email.com" required class="w-full px-4 py-3 rounded-xl border border-[#FFD5A5] bg-white focus:outline-none focus:ring-2 focus:ring-[#FF922B] text-[#2D1B00]"><button type="submit" class="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF922B] to-[#FF8C42] text-white font-bold shadow-md hover:shadow-lg transition-all">🧸 Claim My Voucher</button></form></div>'
+
+    content = f'<div class="min-h-screen flex flex-col"><div class="teddy-gradient text-white py-5 px-4 text-center shadow-md sticky top-0 z-10"><div class="text-4xl mb-2 float-anim">🧸</div><h1 class="text-2xl font-bold">TedPro</h1><p class="text-sm opacity-90">Your Plushie Marketing Assistant</p><p class="text-xs mt-1 opacity-75">🕒 {get_teddy_time()}</p></div><div class="flex-1 px-4 py-4"><div class="max-w-3xl mx-auto"><div class="text-center mb-6"><div class="inline-block bg-white/80 backdrop-blur-sm rounded-2xl px-6 py-4 shadow-md border border-[#FFE4CC]"><p class="text-[#5A3A1B] text-sm">👋 Hi! I'm <strong>Teddy</strong>, your plushie marketing assistant! Ask me about our products, pricing, or how to grow your plushie business! 🧸</p></div></div><div id="chat-messages" class="chat-wrapper space-y-4 mb-4">{messages_html}</div>{lead_html}<div class="sticky bottom-4 bg-white/90 backdrop-blur-md rounded-2xl p-3 shadow-lg border border-[#FFE4CC]"><form hx-post="/chat" hx-target="#chat-messages" hx-swap="beforeend" class="flex gap-2"><input type="text" name="prompt" placeholder="Ask Teddy anything..." required class="flex-1 px-4 py-3 rounded-xl border border-[#FFD5A5] bg-[#FFF9F4] focus:outline-none focus:ring-2 focus:ring-[#FF922B] text-[#2D1B00]"><button type="submit" class="px-6 py-3 rounded-xl bg-gradient-to-r from-[#FF922B] to-[#FF8C42] text-white font-bold shadow-md hover:shadow-lg transition-all">🧸 Send</button></form></div><div class="mt-3 text-center"><form action="/chat/clear" method="post"><button type="submit" class="text-xs text-[#8B6914] hover:text-[#FF922B] transition-colors">🗑️ Clear Chat</button></form></div></div></div></div>'
+
+    return HTMLResponse(content=render_base("TedPro Assistant 🧸", content))
 
 @app.post("/chat", response_class=HTMLResponse)
 async def chat_message(request: Request, prompt: str = Form(...)):
     init_session(request)
-
     chat_history = request.session.get("chat_history", [])
-    chat_history.append({
-        "role": "user",
-        "content": prompt,
-        "time": get_teddy_time()
-    })
+    chat_history.append({"role": "user", "content": prompt, "time": get_teddy_time()})
     request.session["chat_history"] = chat_history
     request.session["last_query"] = prompt
 
-    return templates.TemplateResponse("chat_messages.html", {
-        "request": request,
-        "chat_history": chat_history,
-        "streaming": True
-    })
+    user_msg = f'<div class="flex justify-end fade-in"><div class="flex items-end gap-2 max-w-[70%]"><div class="bg-gradient-to-br from-[#FF922B] to-[#FF8C42] text-white px-5 py-4 rounded-2xl rounded-br-md shadow-md"><p class="text-sm leading-relaxed">{prompt}</p><p class="text-xs opacity-60 text-right mt-2">{get_teddy_time()}</p></div><div class="w-9 h-9 rounded-full bg-[#FF922B] flex items-center justify-center text-white flex-shrink-0">👤</div></div></div><div id="bot-response" hx-ext="sse" sse-connect="/chat/stream" sse-swap="message" class="flex justify-start"><div class="flex items-end gap-2 max-w-[70%]"><div class="w-9 h-9 rounded-full bg-[#FFE4CC] flex items-center justify-center flex-shrink-0">🧸</div><div class="bg-white border border-[#FFE4CC] px-5 py-4 rounded-2xl rounded-bl-md shadow-md"><div class="flex items-center gap-1.5"><div class="w-2 h-2 bg-[#FF922B] rounded-full animate-bounce"></div><div class="w-2 h-2 bg-[#FF922B] rounded-full animate-bounce" style="animation-delay:0.1s"></div><div class="w-2 h-2 bg-[#FF922B] rounded-full animate-bounce" style="animation-delay:0.2s"></div><span class="text-sm text-[#8B6914] italic ml-2">Teddy is thinking...</span></div></div></div></div><script>document.body.addEventListener("htmx:sseClose", function(evt) {{ setTimeout(() => window.location.reload(), 300); }});</script>'
+
+    return HTMLResponse(content=user_msg)
 
 @app.get("/chat/stream")
 async def chat_stream(request: Request):
-    """SSE endpoint for streaming bot response"""
     init_session(request)
     query = request.session.get("last_query", "")
 
     async def generate():
         try:
-            product_keywords = ['have', 'stock', 'buy', 'price', 'cost', 'plushie', 'teddy', 
-                              'bear', 'unicorn', 'dinosaur', 'bunny', 'custom', 'order', 
-                              'catalog', 'shop', 'available']
+            product_keywords = ['have', 'stock', 'buy', 'price', 'cost', 'plushie', 'teddy', 'bear', 'unicorn', 'dinosaur', 'bunny', 'custom', 'order', 'catalog', 'shop', 'available']
             is_product_query = any(kw in query.lower() for kw in product_keywords)
-
             enhanced_query = query
             if is_product_query:
                 products = get_engine().search_products(query, max_results=5)
@@ -211,81 +188,29 @@ async def chat_stream(request: Request):
                     enhanced_query = query + "\n\n" + product_context
 
             full_response = ""
-            first_chunk = True
-
             for chunk in get_engine().stream_answer(enhanced_query):
                 full_response += chunk
-                safe_chunk = chunk.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+                safe_chunk = chunk.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                yield f"event: message\ndata: {safe_chunk}\n\n"
 
-                if first_chunk:
-                    # First chunk: open the bot message bubble
-                    html = (
-                        '<div class="flex justify-start fade-in">'
-                        '<div class="flex items-end gap-2 max-w-[70%]">'
-                        '<div class="w-9 h-9 rounded-full bg-[#FFE4CC] flex items-center justify-center flex-shrink-0">🧸</div>'
-                        '<div class="bg-white border border-[#FFE4CC] px-5 py-4 rounded-2xl rounded-bl-md shadow-md">'
-                        f'<p class="text-sm leading-relaxed text-[#2D1B00]">{safe_chunk}</p>'
-                    )
-                    yield f"event: message\ndata: {html}\n\n"
-                    first_chunk = False
-                else:
-                    # Append to the paragraph
-                    yield f"event: message\ndata: {safe_chunk}\n\n"
-
-            # Close the bubble and save
             final = apply_teddy_vibes(full_response)
-            final_escaped = final.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-            
-            close_html = f'<p class="text-xs text-[#8B6914] mt-2">{get_teddy_time()}</p></div></div></div>'
-            yield f"event: message\ndata: {close_html}\n\n"
-
-            # Save to session
             chat_history = request.session.get("chat_history", [])
-            chat_history.append({
-                "role": "assistant",
-                "content": final,
-                "time": get_teddy_time()
-            })
+            chat_history.append({"role": "assistant", "content": final, "time": get_teddy_time()})
             request.session["chat_history"] = chat_history
 
-            # Close the SSE connection
             yield f"event: message\ndata: <script>setTimeout(()=>window.location.reload(),300)</script>\n\n"
-
         except Exception as e:
             logger.error(f"Stream error: {e}")
-            error_html = (
-                '<div class="flex justify-start fade-in">'
-                '<div class="flex items-end gap-2 max-w-[70%]">'
-                '<div class="w-9 h-9 rounded-full bg-[#FFE4CC] flex items-center justify-center flex-shrink-0">🧸</div>'
-                '<div class="bg-white border border-[#FFE4CC] px-5 py-4 rounded-2xl rounded-bl-md shadow-md">'
-                '<p class="text-sm text-red-500">I\'m having trouble connecting right now. Please try again! 🧸</p>'
-                f'<p class="text-xs text-[#8B6914] mt-2">{get_teddy_time()}</p>'
-                '</div></div></div>'
-            )
-            yield f"event: message\ndata: {error_html}\n\n"
-            yield f"event: message\ndata: <script>setTimeout(()=>window.location.reload(),300)</script>\n\n"
+            yield f"event: message\ndata: I'm having trouble connecting right now. Please try again! 🧸\n\n"
+            yield f"event: message\ndata: <script>setTimeout(()=>window.location.reload(),500)</script>\n\n"
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 
 @app.post("/lead", response_class=HTMLResponse)
-async def capture_lead(
-    request: Request,
-    lead_name: str = Form(""),
-    lead_email: str = Form("")
-):
+async def capture_lead(request: Request, lead_name: str = Form(""), lead_email: str = Form("")):
     init_session(request)
-
     if not lead_email or "@" not in lead_email:
         return HTMLResponse("<p class='text-red-500'>Please enter a valid email address.</p>")
-
     try:
         result = get_engine().add_lead(lead_name, lead_email, context="main_chat_v5")
         if result:
@@ -305,13 +230,11 @@ async def clear_chat(request: Request):
     request.session["chat_history"] = []
     return RedirectResponse(url="/", status_code=303)
 
-# ---------------------------------------------------
-# ROUTES - ADMIN
-# ---------------------------------------------------
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     if not request.session.get("admin_authenticated"):
-        return templates.TemplateResponse("admin_login.html", {"request": request})
+        content = '<div class="min-h-screen flex items-center justify-center bg-[#FFF9F4]"><div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] max-w-md w-full"><div class="text-center mb-6"><div class="text-4xl mb-2">🔒</div><h1 class="text-2xl font-bold text-[#2D1B00]">Admin Access</h1></div><form method="post" action="/admin/login" class="space-y-4"><input type="password" name="password" placeholder="Admin Password" required class="w-full px-4 py-3 rounded-xl border border-[#FFD5A5] bg-[#FFF9F4] focus:outline-none focus:ring-2 focus:ring-[#FF922B]"><button type="submit" class="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF922B] to-[#FF8C42] text-white font-bold shadow-md">Login</button></form></div></div>'
+        return HTMLResponse(content=render_base("Admin Login", content))
     return await admin_dashboard(request)
 
 @app.post("/admin/login", response_class=HTMLResponse)
@@ -319,7 +242,7 @@ async def admin_login(request: Request, password: str = Form(...)):
     if password == ADMIN_PASSWORD:
         request.session["admin_authenticated"] = True
         return await admin_dashboard(request)
-    return HTMLResponse("<p class='text-red-500 text-center mt-3'>Incorrect password. Please try again.</p>", status_code=401)
+    return HTMLResponse("<p class='text-red-500'>Incorrect password.</p>", status_code=401)
 
 @app.get("/admin/logout")
 async def admin_logout(request: Request):
@@ -352,64 +275,22 @@ async def admin_dashboard(request: Request):
         cache = supabase.table('qa_cache').select('*').order('hit_count', desc=True).limit(20).execute()
         cache_data = cache.data if cache.data else []
 
-        return templates.TemplateResponse("admin.html", {
-            "request": request,
-            "leads_count": leads_count,
-            "today_leads": today_leads,
-            "conv_count": conv_count,
-            "cache_count": cache_count,
-            "products_count": products_count,
-            "leads": leads_data,
-            "conversations": convs_data,
-            "products": products_data,
-            "cache": cache_data,
-            "now": datetime.now().strftime('%Y-%m-%d %H:%M')
-        })
+        # Build tables HTML
+        leads_rows = ""
+        for lead in leads_data:
+            leads_rows += f'<tr class="border-b border-[#FFE4CC]"><td class="px-4 py-2 text-sm">{lead.get("name", "")}</td><td class="px-4 py-2 text-sm">{lead.get("email", "")}</td><td class="px-4 py-2 text-sm">{lead.get("timestamp", "")[:10]}</td></tr>'
+
+        content = f'<div class="min-h-screen bg-[#FFF9F4] p-4"><div class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6"><h1 class="text-3xl font-bold text-[#2D1B00]">📊 Admin Dashboard</h1><a href="/admin/logout" class="text-sm text-[#8B6914] hover:text-[#FF922B]">Logout</a></div><div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6"><div class="bg-white p-4 rounded-xl shadow-md border border-[#FFE4CC]"><p class="text-sm text-[#8B6914]">Total Leads</p><p class="text-2xl font-bold text-[#2D1B00]">{leads_count}</p></div><div class="bg-white p-4 rounded-xl shadow-md border border-[#FFE4CC]"><p class="text-sm text-[#8B6914]">Today</p><p class="text-2xl font-bold text-[#2D1B00]">{today_leads}</p></div><div class="bg-white p-4 rounded-xl shadow-md border border-[#FFE4CC]"><p class="text-sm text-[#8B6914]">Conversations</p><p class="text-2xl font-bold text-[#2D1B00]">{conv_count}</p></div><div class="bg-white p-4 rounded-xl shadow-md border border-[#FFE4CC]"><p class="text-sm text-[#8B6914]">Products</p><p class="text-2xl font-bold text-[#2D1B00]">{products_count}</p></div></div><div class="bg-white rounded-xl shadow-md border border-[#FFE4CC] overflow-hidden"><div class="p-4 border-b border-[#FFE4CC]"><h2 class="font-bold text-[#2D1B00]">Recent Leads</h2></div><table class="w-full"><thead class="bg-[#FFF9F4]"><tr><th class="px-4 py-2 text-left text-sm text-[#8B6914]">Name</th><th class="px-4 py-2 text-left text-sm text-[#8B6914]">Email</th><th class="px-4 py-2 text-left text-sm text-[#8B6914]">Date</th></tr></thead><tbody>{leads_rows}</tbody></table></div></div></div>'
+
+        return HTMLResponse(content=render_base("Admin Dashboard", content))
     except Exception as e:
         return HTMLResponse(f"<p class='text-red-500'>Error loading dashboard: {e}</p>")
 
-@app.post("/admin/products/upload")
-async def admin_upload_products(request: Request, file: UploadFile = File(...)):
-    if not request.session.get("admin_authenticated"):
-        raise HTTPException(status_code=401)
-    try:
-        from supabase import create_client
-        df = pd.read_csv(file.file)
-        sb_url = os.environ.get("SUPABASE_URL")
-        sb_key = os.environ.get("SUPABASE_KEY")
-        supabase = create_client(sb_url, sb_key)
-
-        supabase.table('products').delete().eq('client_id', 'tedpro_client').execute()
-
-        products = []
-        for _, row in df.iterrows():
-            product = {
-                'client_id': 'tedpro_client',
-                'name': str(row.get('name', '')),
-                'category': str(row.get('category', '')),
-                'price': float(row.get('price', 0)) if pd.notna(row.get('price')) else 0,
-                'currency': str(row.get('currency', 'ZAR')),
-                'in_stock': bool(row.get('in_stock', True)),
-                'description': str(row.get('description', '')),
-                'material': str(row.get('material', '')),
-                'size_cm': int(row.get('size_cm', 0)) if pd.notna(row.get('size_cm')) else 0,
-                'customisable': bool(row.get('customisable', False)),
-                'sku': str(row.get('sku', '')),
-            }
-            products.append(product)
-
-        supabase.table('products').insert(products).execute()
-        return HTMLResponse(f"<p class='text-green-600'>✅ {len(products)} products saved!</p>")
-    except Exception as e:
-        return HTMLResponse(f"<p class='text-red-500'>Error: {e}</p>")
-
-# ---------------------------------------------------
-# ROUTES - DEV TOOLS
-# ---------------------------------------------------
 @app.get("/dev", response_class=HTMLResponse)
 async def dev_page(request: Request):
     if not request.session.get("dev_authenticated"):
-        return templates.TemplateResponse("dev_login.html", {"request": request})
+        content = '<div class="min-h-screen flex items-center justify-center bg-[#FFF9F4]"><div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] max-w-md w-full"><div class="text-center mb-6"><div class="text-4xl mb-2">🔧</div><h1 class="text-2xl font-bold text-[#2D1B00]">Dev Tools</h1></div><form method="post" action="/dev/login" class="space-y-4"><input type="password" name="password" placeholder="Dev Password" required class="w-full px-4 py-3 rounded-xl border border-[#FFD5A5] bg-[#FFF9F4] focus:outline-none focus:ring-2 focus:ring-[#FF922B]"><button type="submit" class="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF922B] to-[#FF8C42] text-white font-bold shadow-md">Login</button></form></div></div>'
+        return HTMLResponse(content=render_base("Dev Login", content))
     return await dev_dashboard(request)
 
 @app.post("/dev/login", response_class=HTMLResponse)
@@ -417,7 +298,7 @@ async def dev_login(request: Request, password: str = Form(...)):
     if password == DEV_PASSWORD:
         request.session["dev_authenticated"] = True
         return await dev_dashboard(request)
-    return HTMLResponse("<p class='text-red-500 text-center mt-3'>Incorrect password. Please try again.</p>", status_code=401)
+    return HTMLResponse("<p class='text-red-500'>Incorrect password.</p>", status_code=401)
 
 @app.get("/dev/logout")
 async def dev_logout(request: Request):
@@ -431,38 +312,11 @@ async def dev_dashboard(request: Request):
         "SUPABASE_KEY": "SET ✓" if os.environ.get("SUPABASE_KEY") else "NOT SET",
         "GMAIL_USER": os.environ.get("GMAIL_USER", "NOT SET"),
         "GMAIL_APP_PASSWORD": "SET ✓" if os.environ.get("GMAIL_APP_PASSWORD") else "NOT SET",
-        "RESEND_API_KEY": "SET ✓" if os.environ.get("RESEND_API_KEY") else "NOT SET",
     }
+    env_rows = ""
+    for key, val in env_vars.items():
+        env_rows += f'<tr class="border-b border-[#FFE4CC]"><td class="px-4 py-2 text-sm font-mono">{key}</td><td class="px-4 py-2 text-sm">{val}</td></tr>'
 
-    return templates.TemplateResponse("dev.html", {
-        "request": request,
-        "env_vars": env_vars,
-        "session_state": dict(request.session)
-    })
+    content = f'<div class="min-h-screen bg-[#FFF9F4] p-4"><div class="max-w-4xl mx-auto"><div class="flex justify-between items-center mb-6"><h1 class="text-3xl font-bold text-[#2D1B00]">🔧 Dev Tools</h1><a href="/dev/logout" class="text-sm text-[#8B6914] hover:text-[#FF922B]">Logout</a></div><div class="bg-white rounded-xl shadow-md border border-[#FFE4CC] overflow-hidden mb-6"><div class="p-4 border-b border-[#FFE4CC]"><h2 class="font-bold text-[#2D1B00]">Environment Variables</h2></div><table class="w-full"><thead class="bg-[#FFF9F4]"><tr><th class="px-4 py-2 text-left text-sm text-[#8B6914]">Variable</th><th class="px-4 py-2 text-left text-sm text-[#8B6914]">Status</th></tr></thead><tbody>{env_rows}</tbody></table></div></div></div>'
 
-@app.post("/dev/clear-cache")
-async def dev_clear_cache(request: Request):
-    if not request.session.get("dev_authenticated"):
-        raise HTTPException(status_code=401)
-    try:
-        from supabase import create_client
-        sb_url = os.environ.get("SUPABASE_URL")
-        sb_key = os.environ.get("SUPABASE_KEY")
-        supabase = create_client(sb_url, sb_key)
-        supabase.table('qa_cache').delete().neq('id', '0').execute()
-        return HTMLResponse("<p class='text-green-600'>✅ Cache cleared!</p>")
-    except Exception as e:
-        return HTMLResponse(f"<p class='text-red-500'>Error: {e}</p>")
-
-@app.post("/dev/test-email")
-async def dev_test_email(request: Request):
-    if not request.session.get("dev_authenticated"):
-        raise HTTPException(status_code=401)
-    try:
-        gmail_user = os.environ.get("GMAIL_USER", "")
-        result = send_welcome_email("Test User", gmail_user)
-        if result:
-            return HTMLResponse("<p class='text-green-600'>✅ Test email sent!</p>")
-        return HTMLResponse("<p class='text-red-500'>Failed to send email. Check credentials.</p>")
-    except Exception as e:
-        return HTMLResponse(f"<p class='text-red-500'>Error: {e}</p>")
+    return HTMLResponse(content=render_base("Dev Tools", content))
