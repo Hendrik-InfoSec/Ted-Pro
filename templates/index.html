@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}TedPro Assistant 🧸{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-6">
+    
+    <!-- Header -->
+    <div class="text-center py-4">
+        <h1 class="text-3xl font-bold text-[#2D1B00]">TedPro Assistant</h1>
+        <p class="text-[#8B6914] mt-1">Your friendly plushie expert 🧸</p>
+    </div>
+    
+    <!-- Quick Questions -->
+    <div class="flex gap-3 justify-center flex-wrap my-4">
+        <form hx-post="/chat" hx-target="#chat-area" hx-swap="innerHTML" class="inline">
+            <input type="hidden" name="prompt" value="What are your prices?">
+            <button type="submit" class="bg-white border-2 border-[#FFE4CC] rounded-full px-5 py-2.5 text-[#5A3A1B] font-semibold hover:bg-[#FF922B] hover:text-white hover:border-[#FF922B] transition-all shadow-sm">
+                Pricing 💰
+            </button>
+        </form>
+        <form hx-post="/chat" hx-target="#chat-area" hx-swap="innerHTML" class="inline">
+            <input type="hidden" name="prompt" value="How does shipping work?">
+            <button type="submit" class="bg-white border-2 border-[#FFE4CC] rounded-full px-5 py-2.5 text-[#5A3A1B] font-semibold hover:bg-[#FF922B] hover:text-white hover:border-[#FF922B] transition-all shadow-sm">
+                Shipping 📦
+            </button>
+        </form>
+        <form hx-post="/chat" hx-target="#chat-area" hx-swap="innerHTML" class="inline">
+            <input type="hidden" name="prompt" value="Can I order custom plushies?">
+            <button type="submit" class="bg-white border-2 border-[#FFE4CC] rounded-full px-5 py-2.5 text-[#5A3A1B] font-semibold hover:bg-[#FF922B] hover:text-white hover:border-[#FF922B] transition-all shadow-sm">
+                Custom Work 🎨
+            </button>
+        </form>
+        <form hx-post="/chat" hx-target="#chat-area" hx-swap="innerHTML" class="inline">
+            <input type="hidden" name="prompt" value="Are your plushies safe for kids?">
+            <button type="submit" class="bg-white border-2 border-[#FFE4CC] rounded-full px-5 py-2.5 text-[#5A3A1B] font-semibold hover:bg-[#FF922B] hover:text-white hover:border-[#FF922B] transition-all shadow-sm">
+                Safety ✅
+            </button>
+        </form>
+    </div>
+    
+    <!-- Chat Area -->
+    <div id="chat-area">
+        {% if not chat_history %}
+        <div id="messages-container">
+            <div class="text-center py-16">
+                <div class="text-8xl mb-4 float-anim">🧸</div>
+                <h2 class="text-3xl font-bold text-[#2D1B00] mb-3">Hi! I'm Teddy</h2>
+                <p class="text-[#5A3A1B] text-lg">
+                    Ask me anything about CuddleHeros plushies!<br>
+                    I can help with pricing, shipping, custom orders, and more.
+                </p>
+            </div>
+        </div>
+        {% else %}
+        <div class="chat-wrapper space-y-3" id="messages-container">
+            {% for msg in chat_history %}
+                {% if msg.role == 'user' %}
+                <div class="flex justify-end fade-in">
+                    <div class="flex items-end gap-2 max-w-[70%]">
+                        <div class="bg-gradient-to-br from-[#FF922B] to-[#FF8C42] text-white px-5 py-4 rounded-2xl rounded-br-md shadow-md">
+                            <p class="text-sm leading-relaxed">{{ msg.content }}</p>
+                            <p class="text-xs opacity-60 text-right mt-2">{{ msg.time }}</p>
+                        </div>
+                        <div class="w-9 h-9 rounded-full bg-[#FF922B] flex items-center justify-center text-white flex-shrink-0">👤</div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="flex justify-start fade-in">
+                    <div class="flex items-end gap-2 max-w-[70%]">
+                        <div class="w-9 h-9 rounded-full bg-[#FFE4CC] flex items-center justify-center flex-shrink-0">🧸</div>
+                        <div class="bg-white border border-[#FFE4CC] px-5 py-4 rounded-2xl rounded-bl-md shadow-md">
+                            <p class="text-sm leading-relaxed text-[#2D1B00]">{{ msg.content | safe }}</p>
+                            <p class="text-xs text-[#8B6914] mt-2">{{ msg.time }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    
+    <!-- Lead Capture -->
+    {% if show_lead %}
+    <div class="mt-6" id="lead-capture">
+        <div class="bg-gradient-to-br from-[#FF922B] to-[#FF8C42] text-white p-6 rounded-2xl text-center shadow-lg">
+            <h3 class="text-xl font-bold mb-1">🍯 Join the Honey-Pot</h3>
+            <p class="opacity-90 mb-4">Get our secret catalog and 10% off your first order!</p>
+            <form hx-post="/lead" hx-target="#lead-result" hx-swap="innerHTML" class="flex gap-3 justify-center flex-wrap">
+                <input type="text" name="lead_name" placeholder="Your name" 
+                       class="px-4 py-2.5 rounded-xl text-gray-800 w-40 focus:outline-none focus:ring-2 focus:ring-white/50">
+                <input type="email" name="lead_email" placeholder="hello@friend.com" required
+                       class="px-4 py-2.5 rounded-xl text-gray-800 w-52 focus:outline-none focus:ring-2 focus:ring-white/50">
+                <button type="submit" class="bg-white text-[#FF922B] font-bold px-6 py-2.5 rounded-xl hover:bg-gray-100 transition shadow-md">
+                    Get 10% Off 🎁
+                </button>
+            </form>
+            <div id="lead-result" class="mt-3"></div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Chat Input -->
+    <div class="mt-4">
+        <form hx-post="/chat" hx-target="#chat-area" hx-swap="innerHTML" class="flex gap-2">
+            <input type="text" name="prompt" placeholder="Ask me anything about CuddleHeros..." 
+                   class="flex-1 px-5 py-3 rounded-full border-2 border-[#FFE4CC] focus:outline-none focus:border-[#FF922B] shadow-sm text-[#2D1B00]"
+                   autocomplete="off" autofocus>
+            <button type="submit" class="bg-[#FF922B] text-white px-6 py-3 rounded-full font-semibold hover:bg-[#FF8C42] transition shadow-md">
+                Send ✨
+            </button>
+        </form>
+        
+        {% if chat_history %}
+        <form hx-post="/chat/clear" class="mt-3 text-right">
+            <button type="submit" class="text-sm text-[#8B6914] hover:text-[#FF922B] underline">
+                🗑️ Clear Chat
+            </button>
+        </form>
+        {% endif %}
+    </div>
+    
+</div>
+
+<script>
+    // Reload after SSE stream closes to get the saved state
+    document.body.addEventListener('htmx:sseClose', function() {
+        setTimeout(() => { window.location.reload(); }, 500);
+    });
+</script>
+{% endblock %}
