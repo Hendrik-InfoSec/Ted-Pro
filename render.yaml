@@ -2,12 +2,13 @@ services:
   - type: web
     name: tedpro-assistant
     runtime: python
-    plan: starter  # $7/month plan
-region: frankfurt 
-branch: main  # Deploy from main branch
+    plan: starter
+    region: frankfurt
+    branch: main
     buildCommand: pip install -r requirements.txt
-startCommand: streamlit run main.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true    
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
-      
+        value: "3.11.0"
+      - key: SECRET_KEY
+        generateValue: true
