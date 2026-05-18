@@ -37,31 +37,36 @@ app.add_middleware(
 
 templates = Jinja2Templates(directory="templates")
 
+# Auto-create static directory if missing
+os.makedirs("static", exist_ok=True)
+
 # Static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ---------------------------------------------------
-# ENGINE INITIALIZATION
+# ENGINE INITIALIZATION (lazy - prevents startup crash)
 # ---------------------------------------------------
-@lru_cache()
-def get_engine():
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    sb_url = os.environ.get("SUPABASE_URL")
-    sb_key = os.environ.get("SUPABASE_KEY")
-    if not all([api_key, sb_url, sb_key]):
-        raise RuntimeError("Missing environment variables")
-    return HybridEngine(
-        api_key=api_key,
-        supabase_url=sb_url,
-        supabase_key=sb_key,
-        client_id="tedpro_client"
-    )
+_engine = None
 
-try:
-    engine = get_engine()
-except Exception as e:
-    logger.error(f"Engine init failed: {e}")
-    raise
+def get_engine():
+    global _engine
+    if _engine is None:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        sb_url = os.environ.get("SUPABASE_URL")
+        sb_key = os.environ.get("SUPABASE_KEY")
+        if not all([api_key, sb_url, sb_key]):
+            missing = []
+            if not api_key: missing.append("OPENROUTER_API_KEY")
+            if not sb_url: missing.append("SUPABASE_URL")
+            if not sb_key: missing.append("SUPABASE_KEY")
+            raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
+        _engine = HybridEngine(
+            api_key=api_key,
+            supabase_url=sb_url,
+            supabase_key=sb_key,
+            client_id="tedpro_client"
+        )
+    return _engine
 
 # ---------------------------------------------------
 # HELPERS
@@ -198,15 +203,15 @@ async def chat_stream(request: Request):
 
             enhanced_query = query
             if is_product_query:
-                products = engine.search_products(query, max_results=5)
+                products = get_engine().search_products(query, max_results=5)
                 if products:
-                    product_context = "\n\n[PRODUCT INFO]\n" + engine.format_product_response(products)
+                    product_context = "\n\n[PRODUCT INFO]\n" + get_engine().format_product_response(products)
                     enhanced_query = query + "\n\n" + product_context
 
             full_response = ""
             first_chunk = True
 
-            for chunk in engine.stream_answer(enhanced_query):
+            for chunk in get_engine().stream_answer(enhanced_query):
                 full_response += chunk
                 safe_chunk = chunk.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
 
@@ -280,7 +285,7 @@ async def capture_lead(
         return HTMLResponse("<p class='text-red-500'>Please enter a valid email address.</p>")
 
     try:
-        result = engine.add_lead(lead_name, lead_email, context="main_chat_v5")
+        result = get_engine().add_lead(lead_name, lead_email, context="main_chat_v5")
         if result:
             request.session["lead_captured"] = True
             email_sent = send_welcome_email(lead_name, lead_email)
