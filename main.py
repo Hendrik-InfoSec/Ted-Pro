@@ -40,9 +40,6 @@ templates = Jinja2Templates(directory="templates")
 # Auto-create static directory if missing
 os.makedirs("static", exist_ok=True)
 
-# Static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 # ---------------------------------------------------
 # ENGINE INITIALIZATION (lazy - prevents startup crash)
 # ---------------------------------------------------
