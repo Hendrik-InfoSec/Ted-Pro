@@ -16,7 +16,7 @@ class HybridEngine:
         self.model = model
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         self.client_id = client_id or "default"
-        
+
         try:
             self.supabase: Client = create_client(supabase_url, supabase_key)
             self.logger.info("✅ Supabase client initialized")
@@ -24,7 +24,7 @@ class HybridEngine:
         except Exception as e:
             self.logger.error(f"❌ Supabase initialization failed: {e}")
             raise
-        
+
         self.logger.info(f"HybridEngine initialized - model: {model}, client_id: {client_id}")
 
     def _init_tables(self):
@@ -49,7 +49,7 @@ class HybridEngine:
             ).eq('client_id', self.client_id).gte(
                 'created_at', (datetime.now() - timedelta(days=7)).isoformat()
             ).order('hit_count', desc=True).limit(1).execute()
-            
+
             if result.data and len(result.data) > 0:
                 answer = result.data[0]['answer']
                 hit_count = result.data[0]['hit_count']
