@@ -9,6 +9,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -36,9 +37,13 @@ app.add_middleware(
 )
 
 templates = Jinja2Templates(directory="templates")
+templates.env.cache = None  # Fix Python 3.14 Jinja2 cache bug
 
 # Auto-create static directory if missing
 os.makedirs("static", exist_ok=True)
+
+# Static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ---------------------------------------------------
 # ENGINE INITIALIZATION (lazy - prevents startup crash)
