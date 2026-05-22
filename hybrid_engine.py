@@ -167,10 +167,12 @@ class HybridEngine:
             self.logger.error(f"FAQ load error: {e}")
             return False
 
-    def stream_answer(self, question: str) -> Generator[str, None, None]:
+    def stream_answer(self, question: str, chat_history: list = None) -> Generator[str, None, None]:
         self.logger.info(f"Processing question: '{question[:60]}'")
 
-        cached = self.search_local_cache(question)
+        # Skip cache for short or conversational messages — their reply depends on context
+        skip_cache = len(question.strip()) < 20 or chat_history
+        cached = None if skip_cache else self.search_local_cache(question)
         if cached:
             for char in cached:
                 yield char
@@ -201,11 +203,11 @@ class HybridEngine:
             )
 
             full_answer = ""
-            for chunk in self.get_api_answer(question, stream=True, system_prompt=system_prompt):
+            for chunk in self.get_api_answer(question, stream=True, system_prompt=system_prompt, chat_history=chat_history or []):
                 full_answer += chunk
                 yield chunk
 
-            if full_answer:
+            if full_answer and not skip_cache:
                 self._save_to_cache(question, full_answer)
 
         except Exception as e:
@@ -213,11 +215,21 @@ class HybridEngine:
             yield "I'm having trouble connecting right now. Please try again! \U0001f9f8"
 
     def get_api_answer(self, question: str, stream: bool = True,
-                       system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+                       system_prompt: Optional[str] = None,
+                       chat_history: list = None) -> Generator[str, None, None]:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": question})
+        # Inject conversation history so Teddy remembers the full chat
+        for turn in (chat_history or []):
+            role = turn.get("role")
+            text = turn.get("content", "")
+            if role in ("user", "assistant") and text:
+                messages.append({"role": role, "content": text})
+        # Current question is already the last user message in history,
+        # so only append separately if history is empty
+        if not chat_history:
+            messages.append({"role": "user", "content": question})
 
         payload = {
             "model": self.model,
