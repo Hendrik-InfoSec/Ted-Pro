@@ -353,7 +353,11 @@ async def chat_response(request: Request):
     # (FastAPI handles this in a thread pool so it won't block other requests)
     query = request.session.get("last_query", "")
     if not query:
-        return HTMLResponse(content="")   # nothing to do, keep polling
+        # Query already cleared — response was already delivered, stop polling
+        return HTMLResponse(
+            content='<div id="thinking" style="display:none"></div>',
+            headers={"HX-Reswap": "delete"}
+        )
 
     try:
         product_keywords = [
@@ -366,14 +370,19 @@ async def chat_response(request: Request):
             if products:
                 enhanced_query = query + "\n\n[PRODUCT INFO]\n" + get_engine().format_product_response(products)
 
-        full_response = "".join(get_engine().stream_answer(enhanced_query))
+        # Pass history (excluding current user message) so Teddy remembers the conversation
+        history_for_context = [
+            {"role": m["role"], "content": m["content"]}
+            for m in request.session.get("chat_history", [])
+        ]
+        full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
         final         = apply_teddy_vibes(full_response)
         t             = get_teddy_time()
 
         request.session["bot_response"] = final
         request.session["bot_time"]     = t
         request.session["bot_ready"]    = True
-        request.session["last_query"]   = ""   # clear so poller doesn't re-run
+        request.session["last_query"]   = ""  # cleared immediately — stops duplicate polls
 
         # Append to history
         history = request.session.get("chat_history", [])
