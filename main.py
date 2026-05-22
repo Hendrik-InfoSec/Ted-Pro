@@ -122,8 +122,10 @@ BASE_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#129528;</text></svg>">
 <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 body {{ font-family: 'Quicksand', sans-serif; background: #FFF9F4; }}
@@ -135,6 +137,15 @@ body {{ font-family: 'Quicksand', sans-serif; background: #FFF9F4; }}
 .dot1 {{ animation: bounce3 1.2s ease-in-out infinite; }}
 .dot2 {{ animation: bounce3 1.2s ease-in-out 0.15s infinite; }}
 .dot3 {{ animation: bounce3 1.2s ease-in-out 0.3s infinite; }}
+.prose p {{ margin: 0 0 0.5em 0; }}
+.prose p:last-child {{ margin-bottom: 0; }}
+.prose ul {{ list-style: disc; padding-left: 1.2em; margin: 0.4em 0; }}
+.prose ol {{ list-style: decimal; padding-left: 1.2em; margin: 0.4em 0; }}
+.prose li {{ margin: 0.2em 0; }}
+.prose strong {{ font-weight: 700; color: #2D1B00; }}
+.prose em {{ font-style: italic; color: #5A3A1B; }}
+.prose code {{ background: #FFF0DB; color: #c7440a; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }}
+.prose h1,.prose h2,.prose h3 {{ font-weight: 700; color: #2D1B00; margin: 0.5em 0 0.25em; }}
 </style>
 </head>
 <body class="min-h-screen">
@@ -158,14 +169,27 @@ def user_bubble(text: str, t: str) -> str:
     )
 
 def bot_bubble(text: str, t: str) -> str:
+    # Escape backticks so they don't break the JS template literal
+    safe_text = text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    uid = abs(hash(text + t)) % 999999
     return (
         f'<div class="flex justify-start fade-in mb-3">'
         f'<div class="flex items-end gap-2 max-w-[85%] md:max-w-[70%]">'
         f'<div class="w-8 h-8 rounded-full bg-[#FFE4CC] flex items-center justify-center text-sm flex-shrink-0">\U0001f9f8</div>'
         f'<div class="bg-white border border-[#FFE4CC] px-4 py-3 rounded-2xl rounded-bl-md shadow-md">'
-        f'<p class="text-sm leading-relaxed text-[#2D1B00] whitespace-pre-wrap">{text}</p>'
+        f'<div id="md-{uid}" class="text-sm leading-relaxed text-[#2D1B00] prose prose-sm max-w-none"></div>'
         f'<p class="text-xs text-[#8B6914] mt-1">{t}</p>'
         f'</div></div></div>'
+        f'<script>'
+        f'(function(){{'
+        f'  var el=document.getElementById("md-{uid}");'
+        f'  if(el&&window.marked){{'
+        f'    el.innerHTML=marked.parse(`{safe_text}`);'
+        f'  }} else if(el) {{'
+        f'    el.textContent=`{safe_text}`;'
+        f'  }}'
+        f'}})();'
+        f'</script>'
     )
 
 def thinking_bubble() -> str:
@@ -462,6 +486,82 @@ def _login_page(icon: str, title: str, action: str, error: str = "") -> str:
         '</form></div></div>'
     )
 
+@app.post("/admin/products/upload", response_class=HTMLResponse)
+async def upload_products(request: Request, csv_data: str = Form(...)):
+    """Receive CSV text, parse and upsert into Supabase products table."""
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse('<p class="text-red-500">Not authenticated.</p>', status_code=401)
+    try:
+        import io, csv as csv_mod
+        from supabase import create_client
+        sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+
+        reader = csv_mod.DictReader(io.StringIO(csv_data.strip()))
+        rows = list(reader)
+        if not rows:
+            return HTMLResponse('<p class="text-red-500 text-sm">CSV is empty or invalid.</p>')
+
+        required = {"name", "price"}
+        if not required.issubset({c.lower().strip() for c in rows[0].keys()}):
+            return HTMLResponse('<p class="text-red-500 text-sm">CSV must have at least: name, price</p>')
+
+        # Clear existing products for this client then insert fresh
+        sb.table("products").delete().eq("client_id", "tedpro_client").execute()
+
+        products = []
+        for row in rows:
+            # Normalise keys
+            r = {k.lower().strip(): v for k, v in row.items()}
+            try:
+                price = float(r.get("price", 0) or 0)
+            except ValueError:
+                price = 0.0
+            try:
+                size_cm = int(float(r.get("size_cm", 0) or 0))
+            except ValueError:
+                size_cm = 0
+            in_stock = str(r.get("in_stock", "true")).lower() not in ("false", "0", "no")
+            customisable = str(r.get("customisable", "false")).lower() in ("true", "1", "yes")
+            products.append({
+                "client_id": "tedpro_client",
+                "name":        str(r.get("name", "")).strip(),
+                "category":    str(r.get("category", "")).strip(),
+                "price":       price,
+                "currency":    str(r.get("currency", "ZAR")).strip(),
+                "in_stock":    in_stock,
+                "description": str(r.get("description", "")).strip(),
+                "material":    str(r.get("material", "")).strip(),
+                "size_cm":     size_cm,
+                "customisable": customisable,
+                "sku":         str(r.get("sku", "")).strip(),
+            })
+
+        sb.table("products").insert(products).execute()
+        msg = f'✅ {len(products)} products uploaded! <a href="/admin" class="underline ml-2">Refresh</a>'
+        return HTMLResponse(f'<div class="text-green-600 font-semibold text-sm p-3 bg-green-50 rounded-xl">{msg}</div>')
+    except Exception as e:
+        logger.error(f"Product upload error: {e}")
+        return HTMLResponse(f'<p class="text-red-500 text-sm p-3">❌ Upload error: {e}</p>')
+
+
+@app.get("/admin/products/template")
+async def download_template(request: Request):
+    """Return a CSV template for product uploads."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    csv_content = (
+        "name,category,price,currency,in_stock,description,material,size_cm,customisable,sku\n"
+        "Gentle Giant Teddy,Bears,349.00,ZAR,true,Large teddy bear for big hugs,Premium Cotton,50,true,GGT-001\n"
+        "Galaxy Star Bear,Bears,329.00,ZAR,true,Teddy with galaxy print,Premium Plush,35,true,GSB-001\n"
+    )
+    from fastapi.responses import Response
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=products_template.csv"}
+    )
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     if not request.session.get("admin_authenticated"):
@@ -551,6 +651,34 @@ async def _admin_dashboard(request: Request):
             + tbl("Recent Leads", ["Name","Email","Date"], leads_rows)
             + tbl("Recent Conversations", ["Message","Date"], convs_rows)
             + tbl("Products", ["Name","Category","Price","In Stock"], products_rows)
+            + '''<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-6">
+<div class="px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center">
+  <h2 class="font-bold text-[#2D1B00] text-sm">&#128229; Upload Product Catalog</h2>
+  <a href="/admin/products/template" class="text-xs text-[#FF922B] hover:underline font-semibold">
+    &#128229; Download CSV Template
+  </a>
+</div>
+<div class="p-4">
+  <p class="text-xs text-[#8B6914] mb-3">
+    Paste your CSV below or use the template above.<br>
+    Required columns: <code class="bg-[#FFF0DB] px-1 rounded">name</code>, 
+    <code class="bg-[#FFF0DB] px-1 rounded">price</code> &nbsp;|&nbsp;
+    Optional: category, currency, in_stock, description, material, size_cm, customisable, sku
+  </p>
+  <form hx-post="/admin/products/upload" hx-target="#upload-result" hx-swap="innerHTML" class="space-y-3">
+    <textarea name="csv_data" rows="8" placeholder="name,category,price,currency...&#10;My Bear,Bears,299,ZAR..."
+      class="w-full px-3 py-2 rounded-xl border border-[#FFD5A5] bg-[#FFF9F4] text-sm font-mono 
+             focus:outline-none focus:ring-2 focus:ring-[#FF922B] text-[#2D1B00]"
+      required></textarea>
+    <button type="submit"
+      class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#FF922B] to-[#FF8C42] 
+             text-white font-bold text-sm shadow-md hover:shadow-lg transition-all">
+      &#128229; Upload &amp; Replace Catalog
+    </button>
+  </form>
+  <div id="upload-result" class="mt-3"></div>
+</div>
+</div>'''
             + '</div></div>'
         )
         return HTMLResponse(content=render_page("Admin Dashboard", content))
