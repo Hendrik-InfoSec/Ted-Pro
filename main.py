@@ -381,6 +381,10 @@ async def chat_response(request: Request):
             history.append({"role": "assistant", "content": final, "time": t})
             request.session["chat_history"] = history
 
+        # Save Q&A pair for analytics (non-blocking — errors are logged, never raised)
+        session_id = request.session.get("session_id", "unknown")
+        get_engine().save_conversation(session_id, query, final)
+
         return HTMLResponse(content=bot_bubble(final, t))
 
     except Exception as e:
