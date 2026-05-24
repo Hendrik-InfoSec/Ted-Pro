@@ -271,10 +271,22 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    # If the rate-limited request was the chat poller, return a friendly in-chat bubble
+    if "/chat/response" in str(request.url):
+        t = (datetime.now() + timedelta(hours=LOCAL_OFFSET_HOURS)).strftime("%H:%M")
+        return HTMLResponse(
+            content=bot_bubble(
+                "You've been chatting a lot! \U0001f4a4 Teddy can only handle 20 messages per hour to keep things fair. "
+                "Take a short break and come back soon! \U0001f9f8",
+                t
+            ),
+            status_code=200  # 200 so HTMX swaps it into the chat
+        )
+    # For any other rate-limited route, show the full error page
     return HTMLResponse(
         content=error_page(429,
             "Teddy needs a breather \U0001f4a4",
-            "You've sent a lot of messages! Teddy is limited to 20 messages per hour to keep things fair for everyone. Come back soon!"
+            "You've sent a lot of messages! Teddy is limited to 20 messages per hour to keep things fair. Come back soon!"
         ),
         status_code=429
     )
@@ -496,7 +508,7 @@ async def chat_post(request: Request, prompt: str = Form(...)):
 # Background response — called by the poller, generates & returns bot bubble
 # ---------------------------------------------------------------------------
 @app.get("/chat/response", response_class=HTMLResponse)
-@limiter.limit("120/hour")
+@limiter.limit("20/hour")
 async def chat_response(request: Request):
     init_session(request)
 
