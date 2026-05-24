@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # Rate limiter — 20 messages/hour per IP (industry standard for AI chatbots)
-limiter = Limiter(key_func=get_remote_address, default_limits=["20/hour"])
+limiter = Limiter(key_func=get_remote_address)  # No global default — limits applied per-route
 
 app = FastAPI(title="TedPro Assistant", version="2.0.0")
 app.state.limiter = limiter
@@ -474,7 +474,6 @@ async def chat_page(request: Request):
 # Chat POST — saves user msg, starts background generation, returns bubbles
 # ---------------------------------------------------------------------------
 @app.post("/chat", response_class=HTMLResponse)
-@limiter.limit("20/hour")
 async def chat_post(request: Request, prompt: str = Form(...)):
     init_session(request)
     t = get_teddy_time()
@@ -483,9 +482,9 @@ async def chat_post(request: Request, prompt: str = Form(...)):
     cleaned = prompt.strip()
     import re as _re
     is_gibberish = (
-        len(cleaned) < 2 or
-        _re.fullmatch(r"[^a-zA-Z0-9\s]{1,5}", cleaned) or
-        _re.fullmatch(r"(.)\1{2,}", cleaned)   # "fff", "aaaa" etc
+        len(cleaned) < 3 or                                  # too short
+        bool(_re.fullmatch(r"[^a-zA-Z]+", cleaned)) or       # no real words (catches "0", "00", "123")
+        bool(_re.fullmatch(r"(.)\1{2,}", cleaned))            # repeated char ("fff", "lll")
     )
     if is_gibberish:
         nudge = user_bubble(cleaned, t) + bot_bubble(
