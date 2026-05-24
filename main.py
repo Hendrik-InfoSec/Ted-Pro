@@ -11,14 +11,23 @@ from email.mime.multipart import MIMEMultipart
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exception_handlers import http_exception_handler
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from hybrid_engine import HybridEngine
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Rate limiter — 20 messages/hour per IP (industry standard for AI chatbots)
+limiter = Limiter(key_func=get_remote_address, default_limits=["20/hour"])
+
 app = FastAPI(title="TedPro Assistant", version="2.0.0")
+app.state.limiter = limiter
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("SECRET_KEY", "tedpro-fallback-secret")
@@ -98,10 +107,57 @@ def send_welcome_email(name: str, email: str) -> bool:
         logger.error(f"Email failed: {e}")
         return False
 
+# ── Supabase-backed session helpers ─────────────────────────────────────────
+# Only session_id, lead_captured, bot_ready, last_query, bot_response, bot_time
+# are stored in the cookie — all chat history lives in Supabase.
+# This keeps cookies well under the 4KB limit regardless of conversation length.
+
+def _get_supabase():
+    from supabase import create_client
+    return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+
+def load_history(session_id: str) -> list:
+    """Load full chat history for this session from Supabase."""
+    try:
+        sb = _get_supabase()
+        rows = (
+            sb.table("conversations")
+            .select("user_message, bot_response, created_at")
+            .eq("session_id", session_id)
+            .eq("client_id", "tedpro_client")
+            .order("created_at", desc=False)
+            .limit(50)          # last 50 exchanges max — keeps context window sane
+            .execute()
+            .data or []
+        )
+        history = []
+        for r in rows:
+            history.append({"role": "user",      "content": r["user_message"],  "time": ""})
+            history.append({"role": "assistant",  "content": r["bot_response"],  "time": ""})
+        return history
+    except Exception as e:
+        logger.error(f"load_history error: {e}")
+        return []
+
+def save_history_row(session_id: str, user_msg: str, bot_msg: str):
+    """Save a single Q&A exchange to Supabase conversations table."""
+    try:
+        sb = _get_supabase()
+        sb.table("conversations").insert({
+            "session_id":   session_id,
+            "user_message": user_msg,
+            "bot_response": bot_msg[:2000],   # trim very long replies
+            "created_at":   datetime.now().isoformat(),
+            "client_id":    "tedpro_client",
+        }).execute()
+    except Exception as e:
+        logger.error(f"save_history_row error: {e}")   # non-fatal
+
 def init_session(request: Request):
-    if "session_id"    not in request.session: request.session["session_id"]    = str(uuid.uuid4())
-    if "chat_history"  not in request.session: request.session["chat_history"]  = []
-    if "lead_captured" not in request.session: request.session["lead_captured"] = False
+    if "session_id"    not in request.session:
+        request.session["session_id"]    = str(uuid.uuid4())
+    if "lead_captured" not in request.session:
+        request.session["lead_captured"] = False
 
 def _safe_password(env_key: str) -> str:
     val = os.environ.get(env_key)
@@ -172,6 +228,53 @@ document.addEventListener('htmx:afterSettle', function(e) {{
 def render_page(title: str, content: str) -> str:
     return BASE_HTML.format(title=title, content=content)
 
+def error_page(code: int, heading: str, message: str) -> str:
+    """Branded error page — never shows raw tracebacks to users."""
+    content = (
+        f'<div class="min-h-screen flex items-center justify-center px-4">'
+        f'<div class="bg-white rounded-2xl shadow-lg border border-[#FFE4CC] p-10 max-w-md w-full text-center">'
+        f'<div class="text-5xl mb-4">\U0001f9f8</div>'
+        f'<h1 class="text-2xl font-bold text-[#2D1B00] mb-2">{heading}</h1>'
+        f'<p class="text-[#5A3A1B] text-sm mb-6">{message}</p>'
+        f'<a href="/" class="inline-block px-6 py-3 rounded-xl bg-gradient-to-r from-[#FF922B] to-[#FF8C42] '
+        f'text-white font-bold shadow-md text-sm hover:shadow-lg transition-all">Back to Teddy</a>'
+        f'<p class="text-xs text-[#8B6914] mt-4">Error {code}</p>'
+        f'</div></div>'
+    )
+    return render_page("Oops — TedPro", content)
+
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if exc.status_code == 404:
+        return HTMLResponse(
+            content=error_page(404, "Page not found", "This page doesn't exist, but Teddy does!"),
+            status_code=404
+        )
+    if exc.status_code == 405:
+        return RedirectResponse(url="/", status_code=303)
+    return HTMLResponse(
+        content=error_page(exc.status_code, "Something went wrong", "An unexpected error occurred. Please try again."),
+        status_code=exc.status_code
+    )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception on {request.url}: {exc}", exc_info=True)
+    return HTMLResponse(
+        content=error_page(500, "Teddy needs a moment", "Something went wrong on our end. We've been notified and are looking into it."),
+        status_code=500
+    )
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return HTMLResponse(
+        content=error_page(429,
+            "Teddy needs a breather \U0001f4a4",
+            "You've sent a lot of messages! Teddy is limited to 20 messages per hour to keep things fair for everyone. Come back soon!"
+        ),
+        status_code=429
+    )
+
 def user_bubble(text: str, t: str) -> str:
     return (
         f'<div class="flex justify-end fade-in mb-3">'
@@ -231,7 +334,8 @@ def thinking_bubble() -> str:
 @app.get("/", response_class=HTMLResponse)
 async def chat_page(request: Request):
     init_session(request)
-    history       = request.session.get("chat_history", [])
+    session_id    = request.session["session_id"]
+    history       = load_history(session_id)
     lead_captured = request.session.get("lead_captured", False)
     show_lead     = len(history) >= 2 and not lead_captured
 
@@ -354,15 +458,14 @@ async def chat_page(request: Request):
 # Chat POST — saves user msg, starts background generation, returns bubbles
 # ---------------------------------------------------------------------------
 @app.post("/chat", response_class=HTMLResponse)
+@limiter.limit("20/hour")
 async def chat_post(request: Request, prompt: str = Form(...)):
     init_session(request)
-    history = request.session.get("chat_history", [])
-    t       = get_teddy_time()
-    history.append({"role": "user", "content": prompt, "time": t})
-    request.session["chat_history"]  = history
-    request.session["last_query"]    = prompt
-    request.session["bot_ready"]     = False
-    request.session["bot_response"]  = ""
+    t = get_teddy_time()
+    request.session["last_query"]   = prompt
+    request.session["bot_ready"]    = False
+    request.session["bot_response"] = ""
+    request.session["bot_time"]     = t
 
     # Return the user bubble + thinking indicator immediately
     # The thinking div polls /chat/response every 1.5s
@@ -373,6 +476,7 @@ async def chat_post(request: Request, prompt: str = Form(...)):
 # Background response — called by the poller, generates & returns bot bubble
 # ---------------------------------------------------------------------------
 @app.get("/chat/response", response_class=HTMLResponse)
+@limiter.limit("120/hour")
 async def chat_response(request: Request):
     init_session(request)
 
@@ -381,12 +485,6 @@ async def chat_response(request: Request):
         resp = request.session.get("bot_response", "")
         t    = request.session.get("bot_time", get_teddy_time())
         request.session["bot_ready"] = False
-        # Also append to history
-        history = request.session.get("chat_history", [])
-        # Avoid duplicating if poller fires twice
-        if not history or history[-1]["role"] != "assistant":
-            history.append({"role": "assistant", "content": resp, "time": t})
-            request.session["chat_history"] = history
         return HTMLResponse(content=bot_bubble(resp, t))
 
     # Not ready yet — generate synchronously on first poll
@@ -410,29 +508,24 @@ async def chat_response(request: Request):
             if products:
                 enhanced_query = query + "\n\n[PRODUCT INFO]\n" + get_engine().format_product_response(products)
 
-        # Pass history (excluding current user message) so Teddy remembers the conversation
-        history_for_context = [
-            {"role": m["role"], "content": m["content"]}
-            for m in request.session.get("chat_history", [])
-        ]
+        session_id = request.session.get("session_id", "unknown")
+
+        # Load full history from Supabase so Teddy remembers the conversation
+        history_for_context = load_history(session_id)
+        # Append the current user message so it's included in context
+        history_for_context.append({"role": "user", "content": query})
+
         full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
         final         = apply_teddy_vibes(full_response)
         t             = get_teddy_time()
+
+        # Persist to Supabase — single source of truth for history
+        save_history_row(session_id, query, final)
 
         request.session["bot_response"] = final
         request.session["bot_time"]     = t
         request.session["bot_ready"]    = True
         request.session["last_query"]   = ""  # cleared immediately — stops duplicate polls
-
-        # Append to history
-        history = request.session.get("chat_history", [])
-        if not history or history[-1]["role"] != "assistant":
-            history.append({"role": "assistant", "content": final, "time": t})
-            request.session["chat_history"] = history
-
-        # Save Q&A pair for analytics (non-blocking — errors are logged, never raised)
-        session_id = request.session.get("session_id", "unknown")
-        get_engine().save_conversation(session_id, query, final)
 
         return HTMLResponse(content=bot_bubble(final, t))
 
@@ -477,9 +570,15 @@ async def capture_lead(request: Request, lead_name: str = Form(""), lead_email: 
 # ---------------------------------------------------------------------------
 @app.post("/chat/clear")
 async def clear_chat(request: Request):
-    request.session["chat_history"] = []
-    request.session["last_query"]   = ""
-    request.session["bot_ready"]    = False
+    session_id = request.session.get("session_id", "")
+    if session_id:
+        try:
+            sb = _get_supabase()
+            sb.table("conversations").delete().eq("session_id", session_id).eq("client_id", "tedpro_client").execute()
+        except Exception as e:
+            logger.error(f"Clear chat Supabase error: {e}")
+    request.session["last_query"] = ""
+    request.session["bot_ready"]  = False
     return RedirectResponse(url="/", status_code=303)
 
 
