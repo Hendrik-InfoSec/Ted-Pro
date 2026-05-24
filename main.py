@@ -471,40 +471,46 @@ async def chat_page(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Chat POST — saves user msg, starts background generation, returns bubbles
+# Chat POST — validates input, rate limited for spam protection
 # ---------------------------------------------------------------------------
+import re as _re
+
+def _is_gibberish(text: str) -> bool:
+    t = text.strip()
+    if len(t) < 3:
+        return True
+    if _re.fullmatch(r"[^a-zA-Z]+", t):          # no letters: "0", "123", "///"
+        return True
+    if _re.fullmatch(r"([a-zA-Z])\1*", t):        # single letter repeated: "h", "hh", "hhh"
+        return True
+    letters = [c.lower() for c in t if c.isalpha()]
+    vowels = set("aeiou")
+    if letters and len(set(letters)) <= 2 and not any(v in letters for v in vowels):
+        return True                                # keyboard mash with no vowels: "ww", "qq", "hh"
+    return False
+
 @app.post("/chat", response_class=HTMLResponse)
+@limiter.limit("60/hour")
 async def chat_post(request: Request, prompt: str = Form(...)):
     init_session(request)
-    t = get_teddy_time()
-
-    # Reject meaningless input — single chars, pure symbols, repeated chars
+    t       = get_teddy_time()
     cleaned = prompt.strip()
-    import re as _re
-    is_gibberish = (
-        len(cleaned) < 3 or                                  # too short
-        bool(_re.fullmatch(r"[^a-zA-Z]+", cleaned)) or       # no real words (catches "0", "00", "123")
-        bool(_re.fullmatch(r"(.)\1{2,}", cleaned))            # repeated char ("fff", "lll")
-    )
-    if is_gibberish:
-        nudge = user_bubble(cleaned, t) + bot_bubble(
-            "Hmm, I didn\'t quite catch that! Try asking me about our plushies, pricing, or shipping. \U0001f9f8",
-            t
-        )
-        return HTMLResponse(content=nudge)
 
-    request.session["last_query"]   = prompt
+    if _is_gibberish(cleaned):
+        return HTMLResponse(content=
+            user_bubble(cleaned, t) + bot_bubble(
+                "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, or shipping. \U0001f9f8",
+                t
+            )
+        )
+
+    request.session["last_query"]   = cleaned
     request.session["bot_ready"]    = False
     request.session["bot_response"] = ""
     request.session["bot_time"]     = t
-
-    # Return the user bubble + thinking indicator immediately
-    # The thinking div polls /chat/response every 1.5s
-    return HTMLResponse(content=user_bubble(prompt, t) + thinking_bubble())
+    return HTMLResponse(content=user_bubble(cleaned, t) + thinking_bubble())
 
 
-# ---------------------------------------------------------------------------
-# Background response — called by the poller, generates & returns bot bubble
 # ---------------------------------------------------------------------------
 @app.get("/chat/response", response_class=HTMLResponse)
 @limiter.limit("20/hour")
