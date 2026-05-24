@@ -147,8 +147,24 @@ body {{ font-family: 'Quicksand', sans-serif; background: #FFF9F4; }}
 .prose code {{ background: #FFF0DB; color: #c7440a; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }}
 .prose h1,.prose h2,.prose h3 {{ font-weight: 700; color: #2D1B00; margin: 0.5em 0 0.25em; }}
 </style>
+<script>
+function scrollChat() {{
+  var el = document.getElementById('chat-messages');
+  if (el) el.scrollTo({{ top: el.scrollHeight, behavior: 'smooth' }});
+}}
+// Auto-scroll whenever HTMX swaps content into #chat-messages
+document.addEventListener('htmx:afterSwap', function(e) {{
+  if (e.detail.target && e.detail.target.id === 'chat-messages') {{
+    setTimeout(scrollChat, 50);
+  }}
+}});
+// Also scroll when the thinking bubble is removed (bot response arrives)
+document.addEventListener('htmx:afterSettle', function(e) {{
+  setTimeout(scrollChat, 100);
+}});
+</script>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen" onload="scrollChat()">
 {content}
 </body>
 </html>"""
@@ -188,6 +204,7 @@ def bot_bubble(text: str, t: str) -> str:
         f'  }} else if(el) {{'
         f'    el.textContent=`{safe_text}`;'
         f'  }}'
+        f'  scrollChat();'
         f'}})();'
         f'</script>'
     )
@@ -253,8 +270,7 @@ async def chat_page(request: Request):
         f'<button '
         f'hx-post="/chat" hx-target="#chat-messages" hx-swap="beforeend" '
         f'hx-vals=\'{{"prompt":"{query}"}}\' '
-        f'hx-on::after-request="document.getElementById(\'chat-messages\').scrollTop=99999" '
-        f'class="px-3 py-2 rounded-full bg-white border-2 border-[#FFE4CC] text-[#5A3A1B] text-xs font-semibold '
+                f'class="px-3 py-2 rounded-full bg-white border-2 border-[#FFE4CC] text-[#5A3A1B] text-xs font-semibold '
         f'hover:bg-[#FF922B] hover:text-white hover:border-[#FF922B] transition-all shadow-sm whitespace-nowrap">'
         f'{label}</button>'
         for label, query in quick_qs
@@ -302,7 +318,7 @@ async def chat_page(request: Request):
               hx-post="/chat"
               hx-target="#chat-messages"
               hx-swap="beforeend"
-              hx-on::after-request="this.reset(); document.getElementById('chat-messages').scrollTop=99999;"
+              hx-on::after-request="this.reset();"
               class="flex gap-2">
           <input type="text" name="prompt"
                  placeholder="Ask Teddy anything..."
