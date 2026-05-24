@@ -68,8 +68,12 @@ def apply_teddy_vibes(text: str) -> str:
         "Waiting for your next question! \u2728",
         "Teddy out! \U0001f43e"
     ]
+    # Don't double-add closers if cached response already has one
+    already_has_closer = any(c in text for c in closers)
+    if already_has_closer:
+        return text
     if "price" in text.lower() or "cost" in text.lower():
-        text = "I've sniffed out the best value for you! " + text
+        text = "I\'ve sniffed out the best value for you! " + text
     return f"{text}\n\n*{closers[int(time.time()) % len(closers)]}*"
 
 def send_welcome_email(name: str, email: str) -> bool:
@@ -462,6 +466,22 @@ async def chat_page(request: Request):
 async def chat_post(request: Request, prompt: str = Form(...)):
     init_session(request)
     t = get_teddy_time()
+
+    # Reject meaningless input — single chars, pure symbols, repeated chars
+    cleaned = prompt.strip()
+    import re as _re
+    is_gibberish = (
+        len(cleaned) < 2 or
+        _re.fullmatch(r"[^a-zA-Z0-9\s]{1,5}", cleaned) or
+        _re.fullmatch(r"(.)\1{2,}", cleaned)   # "fff", "aaaa" etc
+    )
+    if is_gibberish:
+        nudge = user_bubble(cleaned, t) + bot_bubble(
+            "Hmm, I didn\'t quite catch that! Try asking me about our plushies, pricing, or shipping. \U0001f9f8",
+            t
+        )
+        return HTMLResponse(content=nudge)
+
     request.session["last_query"]   = prompt
     request.session["bot_ready"]    = False
     request.session["bot_response"] = ""
