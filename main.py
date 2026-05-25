@@ -41,6 +41,11 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # ---------------------------------------------------------------------------
 _engine = None
 
+# In-memory response store — keyed by session_id
+# Safe because Render runs single process (WEB_CONCURRENCY=1)
+# Avoids cookie session race condition on duplicate polls
+_response_store: dict = {}
+
 def get_engine():
     global _engine
     if _engine is None:
@@ -512,10 +517,14 @@ async def chat_post(request: Request, prompt: str = Form(...)):
             )
         )
 
-    request.session["last_query"]   = cleaned
-    request.session["bot_ready"]    = False
-    request.session["bot_response"] = ""
-    request.session["bot_time"]     = t
+    session_id = request.session["session_id"]
+    _response_store[session_id] = {
+        "query":    cleaned,
+        "ready":    False,
+        "response": "",
+        "time":     t,
+        "processing": False,   # lock flag
+    }
     return HTMLResponse(content=user_bubble(cleaned, t) + thinking_bubble())
 
 # ---------------------------------------------------------------------------
@@ -526,25 +535,37 @@ async def chat_post(request: Request, prompt: str = Form(...)):
 @limiter.limit("20/hour")
 async def chat_response(request: Request):
     init_session(request)
+    session_id = request.session["session_id"]
+    store = _response_store.get(session_id)
 
-    # If already computed, return the bot bubble immediately
-    if request.session.get("bot_ready"):
-        resp = request.session.get("bot_response", "")
-        t    = request.session.get("bot_time", get_teddy_time())
-        request.session["bot_ready"]   = False
-        request.session["last_query"]  = ""   # ensure cleared
-        return HTMLResponse(content=bot_bubble(resp, t))
-
-    query = request.session.get("last_query", "")
-    if not query:
-        # Nothing to process — stale poll, return silent delete
+    # No pending query for this session
+    if not store:
         return HTMLResponse(
             content='<div id="thinking" style="display:none"></div>',
             headers={"HX-Reswap": "delete"}
         )
 
-    # Mark as processing immediately to prevent duplicate runs on rapid polls
-    request.session["last_query"] = ""   # clear NOW before async work begins
+    # Already done — return stored response
+    if store.get("ready"):
+        resp = store["response"]
+        t    = store["time"]
+        _response_store.pop(session_id, None)   # clean up
+        return HTMLResponse(content=bot_bubble(resp, t))
+
+    # Another poll is already processing — wait for it
+    if store.get("processing"):
+        return HTMLResponse(content="")   # empty — HTMX keeps polling
+
+    # Claim this poll as the processor
+    store["processing"] = True
+
+    query = store.get("query", "")
+    if not query:
+        _response_store.pop(session_id, None)
+        return HTMLResponse(
+            content='<div id="thinking" style="display:none"></div>',
+            headers={"HX-Reswap": "delete"}
+        )
 
     try:
         product_keywords = [
@@ -557,38 +578,34 @@ async def chat_response(request: Request):
             if products:
                 enhanced_query = query + "\n\n[PRODUCT INFO]\n" + get_engine().format_product_response(products)
 
-        session_id = request.session.get("session_id", "unknown")
-
-        # Load full history from Supabase so Teddy remembers the conversation
+        # Load history and add current message
         history_for_context = load_history(session_id)
-        # Append the current user message so it's included in context
         history_for_context.append({"role": "user", "content": query})
 
         full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
-        final         = apply_teddy_vibes(full_response)
-        t             = get_teddy_time()
+        final = apply_teddy_vibes(full_response)
+        t     = get_teddy_time()
 
-        # Persist to Supabase — single source of truth for history
+        # Save to Supabase
         save_history_row(session_id, query, final)
 
-        request.session["bot_response"] = final
-        request.session["bot_time"]     = t
-        request.session["bot_ready"]    = True
-        # last_query already cleared at top of function
+        # Store result for any extra polls that arrive
+        store["response"]   = final
+        store["time"]       = t
+        store["ready"]      = True
+        store["processing"] = False
 
         return HTMLResponse(content=bot_bubble(final, t))
 
     except Exception as e:
-        logger.error(f"Chat response error: {e}")
+        logger.error(f"chat_response error: {e}")
+        _response_store.pop(session_id, None)
         t = get_teddy_time()
-        error_msg = "I'm having trouble connecting right now. Please try again! \U0001f9f8"
-        request.session["last_query"] = ""
-        return HTMLResponse(content=bot_bubble(error_msg, t))
+        return HTMLResponse(content=bot_bubble(
+            "I\'m having trouble connecting right now. Please try again! \U0001f9f8", t
+        ))
 
 
-# ---------------------------------------------------------------------------
-# Lead capture
-# ---------------------------------------------------------------------------
 @app.post("/lead", response_class=HTMLResponse)
 async def capture_lead(request: Request, lead_name: str = Form(""), lead_email: str = Form("")):
     init_session(request)
@@ -626,8 +643,7 @@ async def clear_chat(request: Request):
             sb.table("conversations").delete().eq("session_id", session_id).eq("client_id", "tedpro_client").execute()
         except Exception as e:
             logger.error(f"Clear chat Supabase error: {e}")
-    request.session["last_query"] = ""
-    request.session["bot_ready"]  = False
+    _response_store.pop(session_id, None)   # clear any pending response
     return RedirectResponse(url="/", status_code=303)
 
 
