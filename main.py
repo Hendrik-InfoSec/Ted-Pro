@@ -483,9 +483,13 @@ def _is_gibberish(text: str) -> bool:
     # No letters at all — pure numbers or symbols
     if not any(c.isalpha() for c in t):
         return True
-    # Single unique letter repeated: h, hh, hhh, nnn, ww, ss
     letters = [c.lower() for c in t if c.isalpha()]
+    # Single unique letter repeated: h, hh, hhh, nnn, ww, ss
     if len(set(letters)) == 1 and len(t) <= 4:
+        return True
+    # 5+ letters with no vowels (including y/w as semi-vowels) = keyboard mash
+    vowels = set("aeiouyw")
+    if len(letters) >= 5 and not any(v in letters for v in vowels):
         return True
     return False
 
@@ -527,18 +531,20 @@ async def chat_response(request: Request):
     if request.session.get("bot_ready"):
         resp = request.session.get("bot_response", "")
         t    = request.session.get("bot_time", get_teddy_time())
-        request.session["bot_ready"] = False
+        request.session["bot_ready"]   = False
+        request.session["last_query"]  = ""   # ensure cleared
         return HTMLResponse(content=bot_bubble(resp, t))
 
-    # Not ready yet — generate synchronously on first poll
-    # (FastAPI handles this in a thread pool so it won't block other requests)
     query = request.session.get("last_query", "")
     if not query:
-        # Query already cleared — response was already delivered, stop polling
+        # Nothing to process — stale poll, return silent delete
         return HTMLResponse(
             content='<div id="thinking" style="display:none"></div>',
             headers={"HX-Reswap": "delete"}
         )
+
+    # Mark as processing immediately to prevent duplicate runs on rapid polls
+    request.session["last_query"] = ""   # clear NOW before async work begins
 
     try:
         product_keywords = [
@@ -568,7 +574,7 @@ async def chat_response(request: Request):
         request.session["bot_response"] = final
         request.session["bot_time"]     = t
         request.session["bot_ready"]    = True
-        request.session["last_query"]   = ""  # cleared immediately — stops duplicate polls
+        # last_query already cleared at top of function
 
         return HTMLResponse(content=bot_bubble(final, t))
 
