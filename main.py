@@ -476,21 +476,24 @@ async def chat_page(request: Request):
 import re as _re
 
 def _is_gibberish(text: str) -> bool:
+    """Returns True if input has no conversational value."""
     t = text.strip()
-    if len(t) < 3:
+    if len(t) < 2:
         return True
-    if _re.fullmatch(r"[^a-zA-Z]+", t):          # no letters: "0", "123", "///"
+    # No letters at all — pure numbers or symbols
+    if not any(c.isalpha() for c in t):
         return True
-    if _re.fullmatch(r"([a-zA-Z])\1*", t):        # single letter repeated: "h", "hh", "hhh"
-        return True
+    # Single unique letter repeated: h, hh, hhh, nnn, ww, ss
     letters = [c.lower() for c in t if c.isalpha()]
-    vowels = set("aeiou")
-    if letters and len(set(letters)) <= 2 and not any(v in letters for v in vowels):
-        return True                                # keyboard mash with no vowels: "ww", "qq", "hh"
+    if len(set(letters)) == 1 and len(t) <= 4:
+        return True
     return False
 
+# ---------------------------------------------------------------------------
+# Chat POST — no rate limit here, gibberish is free
+# Rate limit lives on /chat/response where AI actually runs
+# ---------------------------------------------------------------------------
 @app.post("/chat", response_class=HTMLResponse)
-@limiter.limit("60/hour")
 async def chat_post(request: Request, prompt: str = Form(...)):
     init_session(request)
     t       = get_teddy_time()
@@ -499,7 +502,8 @@ async def chat_post(request: Request, prompt: str = Form(...)):
     if _is_gibberish(cleaned):
         return HTMLResponse(content=
             user_bubble(cleaned, t) + bot_bubble(
-                "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, or shipping. \U0001f9f8",
+                "Hmm, I didn't quite get that! Try asking me about our plushies, "
+                "pricing, shipping, or custom orders. \U0001f9f8",
                 t
             )
         )
@@ -510,9 +514,10 @@ async def chat_post(request: Request, prompt: str = Form(...)):
     request.session["bot_time"]     = t
     return HTMLResponse(content=user_bubble(cleaned, t) + thinking_bubble())
 
-
 # ---------------------------------------------------------------------------
-@app.get("/chat/response", response_class=HTMLResponse)
+# Background response — polled every 1.5s, generates Teddy's reply
+# Rate limit here — this is where the AI runs and costs money
+# ---------------------------------------------------------------------------
 @limiter.limit("20/hour")
 async def chat_response(request: Request):
     init_session(request)
@@ -905,3 +910,4 @@ async def _dev_dashboard(request: Request):
         '</div></div>'
     )
     return HTMLResponse(content=render_page("Dev Tools", content))
+        
