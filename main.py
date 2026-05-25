@@ -518,6 +518,7 @@ async def chat_post(request: Request, prompt: str = Form(...)):
 # Background response — polled every 1.5s, generates Teddy's reply
 # Rate limit here — this is where the AI runs and costs money
 # ---------------------------------------------------------------------------
+@app.get("/chat/response", response_class=HTMLResponse)
 @limiter.limit("20/hour")
 async def chat_response(request: Request):
     init_session(request)
@@ -910,4 +911,3 @@ async def _dev_dashboard(request: Request):
         '</div></div>'
     )
     return HTMLResponse(content=render_page("Dev Tools", content))
-        
