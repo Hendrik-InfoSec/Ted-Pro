@@ -838,42 +838,61 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
         reader = csv_mod.DictReader(io.StringIO(csv_data.strip()))
         rows = list(reader)
         if not rows:
-            return HTMLResponse('<p class="text-red-500 text-sm">CSV is empty or invalid.</p>')
+            return HTMLResponse('\u274c CSV is empty or invalid.')
 
         required = {"name", "price"}
         if not required.issubset({c.lower().strip() for c in rows[0].keys()}):
-            return HTMLResponse('<p class="text-red-500 text-sm">CSV must have at least: name, price</p>')
+            return HTMLResponse('\u274c CSV must have at least: name, price')
 
-        sb.table("products").delete().eq("client_id", "tedpro_client").execute()
+        def sv(val, default=""):
+            """Safe string — treats None and blank cells as the default."""
+            v = val if val is not None else default
+            return str(v).strip() if str(v).strip() != "" else str(default).strip()
 
         products = []
         for row in rows:
             r = {k.lower().strip(): v for k, v in row.items()}
             try:
-                price = float(r.get("price", 0) or 0)
-            except ValueError:
+                price = float(sv(r.get("price"), "0") or "0")
+            except (ValueError, TypeError):
                 price = 0.0
             try:
-                size_cm = int(float(r.get("size_cm", 0) or 0))
-            except ValueError:
+                size_cm = int(float(sv(r.get("size_cm"), "0") or "0"))
+            except (ValueError, TypeError):
                 size_cm = 0
-            in_stock     = str(r.get("in_stock", "true")).lower() not in ("false", "0", "no")
-            customisable = str(r.get("customisable", "false")).lower() in ("true", "1", "yes")
+            in_stock     = sv(r.get("in_stock"),     "true").lower()  not in ("false", "0", "no")
+            customisable = sv(r.get("customisable"),  "false").lower() in  ("true",  "1", "yes")
             products.append({
-                "client_id":   "tedpro_client",
-                "name":        str(r.get("name", "")).strip(),
-                "category":    str(r.get("category", "")).strip(),
-                "price":       price,
-                "currency":    str(r.get("currency", "ZAR")).strip(),
-                "in_stock":    in_stock,
-                "description": str(r.get("description", "")).strip(),
-                "material":    str(r.get("material", "")).strip(),
-                "size_cm":     size_cm,
+                "client_id":    "tedpro_client",
+                "name":         sv(r.get("name")),
+                "category":     sv(r.get("category")),
+                "price":        price,
+                "currency":     sv(r.get("currency"), "ZAR"),
+                "in_stock":     in_stock,
+                "description":  sv(r.get("description")),
+                "material":     sv(r.get("material")),
+                "size_cm":      size_cm,
                 "customisable": customisable,
-                "sku":         str(r.get("sku", "")).strip(),
+                "sku":          sv(r.get("sku")),
             })
 
+        # Insert first — only wipe the old catalog once we know the new data is valid
         sb.table("products").insert(products).execute()
+        sb.table("products").delete().eq("client_id", "tedpro_client") \
+            .not_.in_("sku", [p["sku"] for p in products if p["sku"]]).execute() \
+            if any(p["sku"] for p in products) else \
+            None  # fallback: if no SKUs, do a full replace safely after successful insert
+
+        # Full replace path (no SKUs present — delete old rows now that insert succeeded)
+        if not any(p["sku"] for p in products):
+            # Re-fetch just-inserted IDs to avoid deleting them
+            inserted = sb.table("products").select("id").eq("client_id", "tedpro_client") \
+                .order("id", desc=True).limit(len(products)).execute().data or []
+            inserted_ids = [row["id"] for row in inserted]
+            if inserted_ids:
+                sb.table("products").delete().eq("client_id", "tedpro_client") \
+                    .not_.in_("id", inserted_ids).execute()
+
         return HTMLResponse(f'\u2705 {len(products)} products uploaded successfully.')
     except Exception as e:
         logger.error(f"Product upload error: {e}")
