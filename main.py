@@ -5,7 +5,6 @@ import smtplib
 import logging
 import hashlib
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -57,8 +56,10 @@ def get_engine():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+LOCAL_OFFSET_HOURS = 2
+
 def get_teddy_time():
-    return datetime.now(ZoneInfo("Africa/Johannesburg")).strftime("%H:%M")
+    return (datetime.now() + timedelta(hours=LOCAL_OFFSET_HOURS)).strftime("%H:%M")
 
 def apply_teddy_vibes(text: str) -> str:
     closers = [
@@ -86,7 +87,7 @@ def send_welcome_email(name: str, email: str) -> bool:
         msg["Subject"] = "Welcome to the CuddleHeros VIP Club \U0001f9f8"
         msg["From"]    = f"Teddy at CuddleHeros <{gmail_user}>"
         msg["To"]      = email
-        html = f"""<<html><body style="font-family:sans-serif;background:#FFF9F4;padding:20px;">
+        html = f"""<html><body style="font-family:sans-serif;background:#FFF9F4;padding:20px;">
 <div style="max-width:600px;margin:0 auto;background:white;padding:30px;border-radius:20px;">
 <div style="text-align:center;font-size:60px;">\U0001f9f8</div>
 <h1 style="color:#2D1B00;">Welcome {greeting}!</h1>
@@ -260,7 +261,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     if "/chat/response" in str(request.url):
-        t = get_teddy_time()
+        t = (datetime.now() + timedelta(hours=LOCAL_OFFSET_HOURS)).strftime("%H:%M")
         return HTMLResponse(
             content=bot_bubble(
                 "You've been chatting a lot! \U0001f4a4 Teddy can only handle 20 messages per hour to keep things fair. "
@@ -447,7 +448,7 @@ UPLOAD_CARD = (
     'function cuParseCSV(text){'
     'var lines=text.split(/\\r?\\n/).filter(function(l){return l.trim();});'
     'if(!lines.length)return{headers:[],rows:[]};'
-    'function spl(l){var r=[],c="",q=false;for(var i=0;i<<l.length;i++){if(l[i]==\'"\'){q=!q;}else if(l[i]===","&&!q){r.push(c.trim());c="";}else c+=l[i];}r.push(c.trim());return r;}'
+    'function spl(l){var r=[],c="",q=false;for(var i=0;i<l.length;i++){if(l[i]==\'"\'){q=!q;}else if(l[i]===","&&!q){r.push(c.trim());c="";}else c+=l[i];}r.push(c.trim());return r;}'
     'var hdrs=spl(lines[0]).map(function(h){return h.replace(/"/g,"").toLowerCase().trim();});'
     'var rows=lines.slice(1).map(function(l){var v=spl(l),o={};hdrs.forEach(function(h,i){o[h]=(v[i]||"").replace(/"/g,"").trim();});return o;});'
     'return{headers:hdrs,rows:rows};'
@@ -470,39 +471,39 @@ UPLOAD_CARD = (
     'document.getElementById("cu-confirm").style.display="none";'
     'document.getElementById("cu-progress").style.display="none";'
     'document.getElementById("cu-success").style.display="none";'
-    'if(hdrs.indexOf("name")<<0||hdrs.indexOf("price")<<0){'
-    'document.getElementById("cu-table-wrap").innerHTML=\'<<p style="padding:14px;font-size:13px;color:#991b1b">&#9888; CSV must have at minimum a name and price column.</p>\';'
+    'if(hdrs.indexOf("name")<0||hdrs.indexOf("price")<0){'
+    'document.getElementById("cu-table-wrap").innerHTML=\'<p style="padding:14px;font-size:13px;color:#991b1b">&#9888; CSV must have at minimum a name and price column.</p>\';'
     'document.getElementById("cu-stats").innerHTML="";document.getElementById("cu-errors").innerHTML="";return;'
     '}'
     'var v=cuValidate(rows);'
     'var valid=rows.filter(function(r,i){var n=i+2;return!v.errs.some(function(e){return e.startsWith("Row "+n+":");});});'
-    'function sc(num,lbl,col){return\'<<div style="background:\'+col+\';border-radius:8px;padding:10px 14px;flex:1;min-width:80px"><div style="font-size:20px;font-weight:600;color:#2D1B00">\'+num+\'</div><div style="font-size:11px;color:#5A3A1B;margin-top:2px">\'+lbl+\'</div></div>\';}'
+    'function sc(num,lbl,col){return\'<div style="background:\'+col+\';border-radius:8px;padding:10px 14px;flex:1;min-width:80px"><div style="font-size:20px;font-weight:600;color:#2D1B00">\'+num+\'</div><div style="font-size:11px;color:#5A3A1B;margin-top:2px">\'+lbl+\'</div></div>\';}'
     'var st=sc(rows.length,"total rows","#FFF0DB")+sc(valid.length,"valid","#E6FFE6");'
     'if(v.errs.length)st+=sc(v.errs.length,"errors","#FEE2E2");'
     'if(v.warns.length)st+=sc(v.warns.length,"warnings","#FEF9C3");'
     'document.getElementById("cu-stats").innerHTML=st;'
     'var el="";'
     'if(v.errs.length||v.warns.length){'
-    'el=\'<<div style="background:#FEF2F2;border:0.5px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:12px"><ul style="padding-left:14px">\';'
-    'v.errs.forEach(function(e){el+=\'<<li style="font-size:12px;color:#991b1b;margin-bottom:2px">\'+e+\'</li>\';});'
-    'v.warns.forEach(function(w){el+=\'<<li style="font-size:12px;color:#92400e;margin-bottom:2px">\'+w+\'</li>\';});'
+    'el=\'<div style="background:#FEF2F2;border:0.5px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:12px"><ul style="padding-left:14px">\';'
+    'v.errs.forEach(function(e){el+=\'<li style="font-size:12px;color:#991b1b;margin-bottom:2px">\'+e+\'</li>\';});'
+    'v.warns.forEach(function(w){el+=\'<li style="font-size:12px;color:#92400e;margin-bottom:2px">\'+w+\'</li>\';});'
     'el+="</ul></div>";'
     '}'
     'document.getElementById("cu-errors").innerHTML=el;'
     'var disp=["name","category","price","currency","in_stock","description"];'
     'var cols=disp.filter(function(c){return hdrs.indexOf(c)>-1;});'
     'var cw={name:"28%",category:"16%",price:"13%",currency:"10%",in_stock:"10%",description:"23%"};'
-    'var th="<tr>"+cols.map(function(c){return\'<<th style="position:sticky;top:0;background:#FFF9F4;padding:7px 10px;text-align:left;font-size:11px;font-weight:600;color:#8B6914;text-transform:uppercase;letter-spacing:.05em;border-bottom:0.5px solid #FFD5A5;white-space:nowrap;width:\'+cw[c]+\'">\'+c+"</th>";}).join("")+"</tr>";'
+    'var th="<tr>"+cols.map(function(c){return\'<th style="position:sticky;top:0;background:#FFF9F4;padding:7px 10px;text-align:left;font-size:11px;font-weight:600;color:#8B6914;text-transform:uppercase;letter-spacing:.05em;border-bottom:0.5px solid #FFD5A5;white-space:nowrap;width:\'+cw[c]+\'">\'+c+"</th>";}).join("")+"</tr>";'
     'var tb=rows.map(function(r,i){'
     'var n=i+2,hasE=v.errs.some(function(e){return e.startsWith("Row "+n+":");});'
     'return"<tr style=\\"border-bottom:0.5px solid #FFE4CC;"+(hasE?"background:#FEE2E2;":"")+"\\">"+cols.map(function(c){'
     'var val=r[c]||"";'
-    'if(c==="in_stock"){var ok=val.toLowerCase()!=="false"&&val!=="0";return\'<<td style="padding:7px 10px;font-size:12px"><span style="display:inline-block;padding:2px 7px;border-radius:100px;font-size:10px;font-weight:600;background:\'+(ok?"#DCFCE7":"#FEE2E2")+\';color:\'+(ok?"#166534":"#991b1b")+\'">\'+( ok?"Yes":"No")+"</span></td>";}'
-    'if(c==="price"&&val){return\'<<td style="padding:7px 10px;font-size:12px;font-weight:600;color:#2D1B00">\'+(r.currency||"ZAR")+" "+parseFloat(val).toFixed(2)+"</td>";}'
-    'return\'<<td style="padding:7px 10px;font-size:12px;color:#2D1B00;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0" title="\'+val+\'">\'+val+"</td>";'
+    'if(c==="in_stock"){var ok=val.toLowerCase()!=="false"&&val!=="0";return\'<td style="padding:7px 10px;font-size:12px"><span style="display:inline-block;padding:2px 7px;border-radius:100px;font-size:10px;font-weight:600;background:\'+(ok?"#DCFCE7":"#FEE2E2")+\';color:\'+(ok?"#166534":"#991b1b")+\'">\'+( ok?"Yes":"No")+"</span></td>";}'
+    'if(c==="price"&&val){return\'<td style="padding:7px 10px;font-size:12px;font-weight:600;color:#2D1B00">\'+(r.currency||"ZAR")+" "+parseFloat(val).toFixed(2)+"</td>";}'
+    'return\'<td style="padding:7px 10px;font-size:12px;color:#2D1B00;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0" title="\'+val+\'">\'+val+"</td>";'
     '}).join("")+"</tr>";'
     '}).join("");'
-    'document.getElementById("cu-table-wrap").innerHTML=\'<<table style="width:100%;border-collapse:collapse;table-layout:fixed"><thead>\'+th+"</thead><tbody>"+tb+"</tbody></table>";'
+    'document.getElementById("cu-table-wrap").innerHTML=\'<table style="width:100%;border-collapse:collapse;table-layout:fixed"><thead>\'+th+"</thead><tbody>"+tb+"</tbody></table>";'
     'if(valid.length)document.getElementById("cu-confirm").style.display="";'
     '}\n'
 
@@ -520,13 +521,13 @@ UPLOAD_CARD = (
     'setTimeout(function(){'
     'document.getElementById("cu-progress").style.display="none";'
     'var isErr=html.indexOf("&#10060;")>-1||html.toLowerCase().indexOf("error")>-1||html.indexOf("\\u274c")>-1;'
-    'if(isErr){document.getElementById("cu-errors").innerHTML=\'<<div style="background:#FEF2F2;border:0.5px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:12px"><p style="font-size:12px;color:#991b1b">Server error: \'+html.replace(/<<[^>]+>/g,"").trim()+"</p></div>";document.getElementById("cu-confirm").style.display="";}'
+    'if(isErr){document.getElementById("cu-errors").innerHTML=\'<div style="background:#FEF2F2;border:0.5px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:12px"><p style="font-size:12px;color:#991b1b">Server error: \'+html.replace(/<[^>]+>/g,"").trim()+"</p></div>";document.getElementById("cu-confirm").style.display="";}'
     'else{document.getElementById("cu-success").style.display="";document.getElementById("cu-success-msg").textContent=_rows.length+" products uploaded successfully. Your catalog is live.";}'
     '},350);'
     '})'
     '.catch(function(e){'
     'clearInterval(t);document.getElementById("cu-progress").style.display="none";'
-    'document.getElementById("cu-errors").innerHTML=\'<<div style="background:#FEF2F2;border:0.5px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:12px"><p style="font-size:12px;color:#991b1b">Network error: \'+e.message+"</p></div>";'
+    'document.getElementById("cu-errors").innerHTML=\'<div style="background:#FEF2F2;border:0.5px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:12px"><p style="font-size:12px;color:#991b1b">Network error: \'+e.message+"</p></div>";'
     'document.getElementById("cu-confirm").style.display="";'
     '});'
     '};\n'
@@ -839,33 +840,18 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
         if not rows:
             return HTMLResponse('\u274c CSV is empty or invalid.')
 
-        # ── FIX #1: Safe header parsing ─────────────────────────────────────
         required = {"name", "price"}
-        headers = set()
-        for c in rows[0].keys():
-            if c is None:
-                continue
-            headers.add(str(c).lower().strip())
-
-        if not required.issubset(headers):
+        if not required.issubset({c.lower().strip() for c in rows[0].keys()}):
             return HTMLResponse('\u274c CSV must have at least: name, price')
 
         def sv(val, default=""):
             """Safe string — treats None and blank cells as the default."""
-            if val is None:
-                return str(default).strip()
-            v = str(val).strip()
-            return v if v != "" else str(default).strip()
+            v = val if val is not None else default
+            return str(v).strip() if str(v).strip() != "" else str(default).strip()
 
         products = []
         for row in rows:
-            # ── FIX #2: Skip None keys, force str() before .lower() ────────
-            r = {}
-            for k, v in row.items():
-                if k is None:
-                    continue
-                r[str(k).lower().strip()] = v
-
+            r = {k.lower().strip(): v for k, v in row.items()}
             try:
                 price = float(sv(r.get("price"), "0") or "0")
             except (ValueError, TypeError):
@@ -874,21 +860,8 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
                 size_cm = int(float(sv(r.get("size_cm"), "0") or "0"))
             except (ValueError, TypeError):
                 size_cm = 0
-
-            # ── FIX #3: str() wrapper before .lower() ──────────────────────
-            in_stock = (
-                str(sv(r.get("in_stock"), "true"))
-                .strip()
-                .lower()
-                not in ("false", "0", "no")
-            )
-            customisable = (
-                str(sv(r.get("customisable"), "false"))
-                .strip()
-                .lower()
-                in ("true", "1", "yes")
-            )
-
+            in_stock     = sv(r.get("in_stock"),     "true").lower()  not in ("false", "0", "no")
+            customisable = sv(r.get("customisable"),  "false").lower() in  ("true",  "1", "yes")
             products.append({
                 "client_id":    "tedpro_client",
                 "name":         sv(r.get("name")),
@@ -903,38 +876,16 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
                 "sku":          sv(r.get("sku")),
             })
 
-        if not products:
-            return HTMLResponse('\u274c No valid products found after parsing.')
+        # Step 1: fetch existing IDs before touching anything
+        existing = sb.table("products").select("id").eq("client_id", "tedpro_client").execute().data or []
+        existing_ids = [row["id"] for row in existing]
 
-        # ── FIX #4: Safer replacement — insert first, delete old after ───
-        # 1. Insert new products
+        # Step 2: insert the new rows — if this throws, nothing has been deleted yet
         sb.table("products").insert(products).execute()
 
-        # 2. Build list of SKUs we just inserted
-        inserted_skus = [p["sku"] for p in products if p["sku"]]
-
-        if inserted_skus:
-            # Delete old products whose SKU is NOT in the new list
-            sb.table("products") \
-                .delete() \
-                .eq("client_id", "tedpro_client") \
-                .not_.in_("sku", inserted_skus) \
-                .execute()
-        else:
-            # No SKUs provided — safer fallback: delete by ID
-            inserted = sb.table("products") \
-                .select("id") \
-                .eq("client_id", "tedpro_client") \
-                .order("id", desc=True) \
-                .limit(len(products)) \
-                .execute().data or []
-            inserted_ids = [row["id"] for row in inserted]
-            if inserted_ids:
-                sb.table("products") \
-                    .delete() \
-                    .eq("client_id", "tedpro_client") \
-                    .not_.in_("id", inserted_ids) \
-                    .execute()
+        # Step 3: only now delete the old rows by their IDs
+        if existing_ids:
+            sb.table("products").delete().in_("id", existing_ids).execute()
 
         return HTMLResponse(f'\u2705 {len(products)} products uploaded successfully.')
     except Exception as e:
@@ -1093,7 +1044,7 @@ async def _dev_dashboard(request: Request):
     rows = "".join(
         f'<tr class="border-b border-[#FFE4CC]">'
         f'<td class="px-4 py-2 text-sm font-mono text-[#2D1B00]">{k}</td>'
-        f'<td class="px-4 py-2 text-sm">{"<<span class=\'text-green-600 font-semibold\'>\u2705 Set</span>" if v else "<span class=\'text-red-500\'>\u274c Missing</span>"}</td>'
+        f'<td class="px-4 py-2 text-sm">{"<span class=\'text-green-600 font-semibold\'>\u2705 Set</span>" if v else "<span class=\'text-red-500\'>\u274c Missing</span>"}</td>'
         f'<td class="px-4 py-2 text-xs text-[#8B6914] font-mono">{"***" + v[-4:] if v and len(v) > 6 else (v or "")}</td></tr>'
         for k, v in checks.items()
     )
