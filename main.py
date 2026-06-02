@@ -9,7 +9,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exception_handlers import http_exception_handler
 from starlette.middleware.sessions import SessionMiddleware
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=get_remote_address)
 
-app = FastAPI(title="TedPro Assistant", version="2.0.0")
+app = FastAPI(title="TedPro Assistant", version="2.1.0")
 app.state.limiter = limiter
 app.add_middleware(
     SessionMiddleware,
@@ -129,8 +129,8 @@ def load_history(session_id: str) -> list:
         )
         history = []
         for r in rows:
-            history.append({"role": "user",      "content": r["user_message"],  "time": ""})
-            history.append({"role": "assistant",  "content": r["bot_response"],  "time": ""})
+            history.append({"role": "user",     "content": r["user_message"], "time": ""})
+            history.append({"role": "assistant", "content": r["bot_response"], "time": ""})
         return history
     except Exception as e:
         logger.error(f"load_history error: {e}")
@@ -166,6 +166,41 @@ ADMIN_PASSWORD = _safe_password("ADMIN_PASSWORD")
 DEV_PASSWORD   = _safe_password("DEV_PASSWORD")
 
 # ---------------------------------------------------------------------------
+# Stock lookup — used by Teddy to answer "is X in stock?" reliably
+# ---------------------------------------------------------------------------
+def lookup_stock(query: str) -> str | None:
+    """
+    Direct Supabase product lookup for stock queries.
+    Returns a plain-text answer string, or None if no match found.
+    """
+    try:
+        sb = _get_supabase()
+        all_products = sb.table("products").select(
+            "name, in_stock, price, currency, category, size_cm, material, sku"
+        ).eq("client_id", "tedpro_client").execute().data or []
+
+        q = query.lower()
+        matches = [
+            p for p in all_products
+            if any(word in p.get("name", "").lower() for word in q.split() if len(word) > 2)
+        ]
+        if not matches:
+            return None
+
+        lines = []
+        for p in matches[:5]:
+            stock_str = "In stock \u2705" if p.get("in_stock") else "Out of stock \u274c"
+            lines.append(
+                f"**{p['name']}** ({p.get('category','')}) — "
+                f"{p.get('currency','ZAR')} {float(p.get('price',0)):.2f} — {stock_str} — "
+                f"SKU: {p.get('sku','')} — Size: {p.get('size_cm','')}cm — {p.get('material','')}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"lookup_stock error: {e}")
+        return None
+
+# ---------------------------------------------------------------------------
 # HTML helpers
 # ---------------------------------------------------------------------------
 BASE_HTML = """<!DOCTYPE html>
@@ -198,6 +233,11 @@ body {{ font-family: 'Quicksand', sans-serif; background: #FFF9F4; }}
 .prose em {{ font-style: italic; color: #5A3A1B; }}
 .prose code {{ background: #FFF0DB; color: #c7440a; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }}
 .prose h1,.prose h2,.prose h3 {{ font-weight: 700; color: #2D1B00; margin: 0.5em 0 0.25em; }}
+/* Product catalog admin styles */
+.product-row-detail {{ display:none; }}
+.product-row-detail.open {{ display:table-row; }}
+.stock-toggle {{ cursor:pointer; transition: opacity .15s; }}
+.stock-toggle:hover {{ opacity:.75; }}
 </style>
 <script>
 function scrollChat() {{
@@ -212,6 +252,11 @@ document.addEventListener('htmx:afterSwap', function(e) {{
 document.addEventListener('htmx:afterSettle', function(e) {{
   setTimeout(scrollChat, 100);
 }});
+function toggleRow(id) {{
+  var el = document.getElementById('detail-' + id);
+  if (!el) return;
+  el.classList.toggle('open');
+}}
 </script>
 </head>
 <body class="min-h-screen" onload="scrollChat()">
@@ -273,7 +318,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return HTMLResponse(
         content=error_page(429,
             "Teddy needs a breather \U0001f4a4",
-            "You've sent a lot of messages! Teddy is limited to 20 messages per hour to keep things fair. Come back soon!"
+            "You've sent a lot of messages! Teddy is limited to 20 messages per hour. Come back soon!"
         ),
         status_code=429
     )
@@ -330,7 +375,71 @@ def thinking_bubble() -> str:
     )
 
 # ---------------------------------------------------------------------------
-# Upload card — industry-standard drag-drop CSV uploader for admin dashboard
+# Admin product catalog HTML — expandable rows + live stock toggle
+# ---------------------------------------------------------------------------
+def _render_product_row(p: dict) -> str:
+    pid     = p.get("id", "")
+    name    = p.get("name", "")
+    cat     = p.get("category", "")
+    cur     = p.get("currency", "ZAR")
+    price   = float(p.get("price", 0))
+    in_stk  = p.get("in_stock", True)
+    desc    = p.get("description", "—")
+    mat     = p.get("material", "—")
+    size    = p.get("size_cm", "—")
+    custom  = p.get("customisable", False)
+    sku     = p.get("sku", "—")
+
+    stk_badge = (
+        f'<span id="stk-{pid}" '
+        f'hx-post="/admin/products/{pid}/toggle-stock" '
+        f'hx-target="#stk-{pid}" '
+        f'hx-swap="outerHTML" '
+        f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold '
+        + (
+            'bg-green-100 text-green-700" title="Click to mark out of stock">'
+            '\u2705 In stock'
+            if in_stk else
+            'bg-red-100 text-red-600" title="Click to mark in stock">'
+            '\u274c Out of stock'
+        )
+        + '</span>'
+    )
+
+    main_row = (
+        f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5] cursor-pointer" onclick="toggleRow(\'{pid}\')">'
+        f'<td class="px-4 py-3 text-sm font-semibold text-[#2D1B00]">'
+        f'<span class="text-[#FF922B] mr-2 text-xs">&#9654;</span>{name}</td>'
+        f'<td class="px-4 py-3 text-sm text-[#8B6914]">{cat}</td>'
+        f'<td class="px-4 py-3 text-sm text-[#8B6914] font-mono">{sku}</td>'
+        f'<td class="px-4 py-3 text-sm font-semibold text-[#FF922B]">{cur} {price:.2f}</td>'
+        f'<td class="px-4 py-3 text-sm">{stk_badge}</td>'
+        f'</tr>'
+    )
+
+    detail_row = (
+        f'<tr id="detail-{pid}" class="product-row-detail bg-[#FFFAF5]">'
+        f'<td colspan="5" class="px-6 py-4">'
+        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem">'
+        f'<div><p class="text-xs font-semibold text-[#8B6914] uppercase mb-1">Description</p>'
+        f'<p class="text-sm text-[#2D1B00]">{desc}</p></div>'
+        f'<div><p class="text-xs font-semibold text-[#8B6914] uppercase mb-1">Material</p>'
+        f'<p class="text-sm text-[#2D1B00]">{mat}</p>'
+        f'<p class="text-xs font-semibold text-[#8B6914] uppercase mb-1 mt-3">Size</p>'
+        f'<p class="text-sm text-[#2D1B00]">{size} cm</p></div>'
+        f'<div><p class="text-xs font-semibold text-[#8B6914] uppercase mb-1">Customisable</p>'
+        f'<p class="text-sm text-[#2D1B00]">{"Yes \U0001f3a8" if custom else "No"}</p>'
+        f'<p class="text-xs font-semibold text-[#8B6914] uppercase mb-1 mt-3">SKU</p>'
+        f'<p class="text-sm font-mono text-[#2D1B00]">{sku}</p></div>'
+        f'</div>'
+        f'</td></tr>'
+    )
+
+    return main_row + detail_row
+
+
+# ---------------------------------------------------------------------------
+# Upload card — drag-drop CSV uploader
 # ---------------------------------------------------------------------------
 UPLOAD_CARD = (
     '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-6">'
@@ -339,14 +448,10 @@ UPLOAD_CARD = (
     '<a href="/admin/products/template" class="text-xs text-[#FF922B] hover:underline font-semibold">'
     '&#128229; Download CSV Template</a></div>'
     '<div class="p-4">'
-
-    # Tabs
     '<div style="display:flex;gap:0;margin-bottom:1rem;border:0.5px solid #FFD5A5;border-radius:10px;overflow:hidden">'
     '<button id="tab-file-btn" onclick="chTab(\'file\')" style="flex:1;padding:8px 12px;font-size:13px;font-weight:600;cursor:pointer;background:#FFF9F4;color:#2D1B00;border:none;font-family:inherit">&#128196; Upload file</button>'
     '<button id="tab-paste-btn" onclick="chTab(\'paste\')" style="flex:1;padding:8px 12px;font-size:13px;font-weight:500;cursor:pointer;background:white;color:#8B6914;border:none;border-left:0.5px solid #FFD5A5;font-family:inherit">&#128203; Paste CSV</button>'
     '</div>'
-
-    # File drop tab
     '<div id="tab-file-panel">'
     '<div id="cu-drop" onclick="document.getElementById(\'cu-file\').click()" '
     'ondragover="event.preventDefault();this.style.background=\'#FFE4CC\';this.style.borderColor=\'#FF922B\'" '
@@ -359,56 +464,42 @@ UPLOAD_CARD = (
     '</div>'
     '<input type="file" id="cu-file" accept=".csv,text/csv" style="display:none" onchange="if(this.files[0])cuReadFile(this.files[0])">'
     '</div>'
-
-    # Paste tab
     '<div id="tab-paste-panel" style="display:none">'
     '<p style="font-size:12px;color:#8B6914;margin-bottom:6px">'
     'Required: <code style="background:#FFF0DB;padding:1px 4px;border-radius:4px">name</code>, '
     '<code style="background:#FFF0DB;padding:1px 4px;border-radius:4px">price</code></p>'
     '<textarea id="cu-paste" rows="7" '
-    'placeholder="name,category,price,currency,in_stock,description,material,size_cm,customisable,sku&#10;Gentle Giant Teddy,Bears,349.00,ZAR,true,Large teddy bear,Premium Cotton,50,true,GGT-001" '
+    'placeholder="name,category,price,currency,in_stock,description,material,size_cm,customisable,sku" '
     'style="width:100%;padding:10px 12px;border:0.5px solid #FFD5A5;border-radius:10px;background:#FFF9F4;color:#2D1B00;font-family:monospace;font-size:12px;resize:vertical;outline:none"></textarea>'
     '<button onclick="cuParsePaste()" style="margin-top:8px;padding:7px 16px;border-radius:8px;border:0.5px solid #FFD5A5;background:white;color:#2D1B00;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">&#128202; Preview</button>'
     '</div>'
-
-    # Preview section
     '<div id="cu-preview" style="display:none;margin-top:1.25rem">'
     '<div id="cu-stats" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem"></div>'
     '<div id="cu-errors"></div>'
     '<div id="cu-table-wrap" style="border:0.5px solid #FFD5A5;border-radius:10px;overflow:auto;max-height:220px;margin-bottom:1rem"></div>'
-
-    # Confirm
     '<div id="cu-confirm" style="display:none">'
     '<div style="background:#FFF0DB;border:0.5px solid #FFD5A5;border-radius:10px;padding:12px 16px;margin-bottom:12px">'
     '<p style="font-size:13px;color:#5A3A1B"><strong style="color:#2D1B00">Replace entire catalog?</strong> '
-    'This deletes all existing products and uploads the new ones. This cannot be undone.</p></div>'
+    'This deletes all existing products and uploads the new ones. Cannot be undone.</p></div>'
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
     '<button id="cu-upload-btn" onclick="cuDoUpload()" style="padding:9px 20px;border-radius:8px;background:#FF922B;color:white;border:none;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">&#9989; Upload &amp; replace catalog</button>'
     '<button onclick="cuReset()" style="padding:9px 16px;border-radius:8px;background:white;color:#2D1B00;border:0.5px solid #FFD5A5;font-size:13px;cursor:pointer;font-family:inherit">Cancel</button>'
     '</div></div>'
-
-    # Progress
     '<div id="cu-progress" style="display:none">'
     '<div style="height:4px;background:#FFE4CC;border-radius:100px;overflow:hidden;margin-bottom:8px">'
     '<div id="cu-bar" style="height:100%;background:#FF922B;border-radius:100px;width:0%;transition:width .3s"></div></div>'
     '<p id="cu-prog-lbl" style="font-size:12px;color:#8B6914">Uploading...</p></div>'
-
-    # Success
     '<div id="cu-success" style="display:none">'
     '<div style="background:#F0FFF4;border:0.5px solid #86EFAC;border-radius:10px;padding:12px 16px;margin-bottom:8px;display:flex;align-items:center;gap:10px">'
     '<span style="font-size:20px">&#9989;</span>'
     '<p id="cu-success-msg" style="font-size:13px;color:#166534;font-weight:600"></p></div>'
     '<span onclick="cuReset()" style="font-size:12px;color:#8B6914;text-decoration:underline;cursor:pointer">Upload another file</span>'
     '</div>'
-
-    '</div>'  # /cu-preview
-    '</div>'  # /p-4
-    '</div>'  # /card
-
-    # JS — all logic in one IIFE, globals exposed via window.*
+    '</div>'
+    '</div>'
+    '</div>'
     '<script>(function(){'
     'var _csv="",_rows=[];\n'
-
     'window.chTab=function(t){'
     'var isF=t==="file";'
     'document.getElementById("tab-file-panel").style.display=isF?"":"none";'
@@ -417,13 +508,11 @@ UPLOAD_CARD = (
     'fb.style.background=isF?"#FFF9F4":"white";fb.style.fontWeight=isF?"600":"500";fb.style.color=isF?"#2D1B00":"#8B6914";'
     'pb.style.background=isF?"white":"#FFF9F4";pb.style.fontWeight=isF?"500":"600";pb.style.color=isF?"#8B6914":"#2D1B00";'
     '};\n'
-
     'window.cuDrop=function(e){'
     'e.preventDefault();'
     'var dz=document.getElementById("cu-drop");dz.style.background="#FFF9F4";dz.style.borderColor="#FFD5A5";'
     'var f=e.dataTransfer.files[0];if(f)cuReadFile(f);'
     '};\n'
-
     'window.cuReadFile=function(f){'
     'if(!f.name.match(/\\.csv$/i)){alert("Please upload a .csv file.");return;}'
     'var r=new FileReader();'
@@ -436,15 +525,12 @@ UPLOAD_CARD = (
     'cuParseAndPreview(_csv);'
     '};r.readAsText(f);'
     '};\n'
-
     'window.cuParsePaste=function(){'
     '_csv=document.getElementById("cu-paste").value.trim();'
     'if(!_csv){alert("Paste some CSV content first.");return;}'
     'cuParseAndPreview(_csv);'
     '};\n'
-
     'function cuFmtSz(b){return b>1048576?(b/1048576).toFixed(1)+" MB":b>1024?(b/1024).toFixed(0)+" KB":b+" B";}\n'
-
     'function cuParseCSV(text){'
     'var lines=text.split(/\\r?\\n/).filter(function(l){return l.trim();});'
     'if(!lines.length)return{headers:[],rows:[]};'
@@ -453,7 +539,6 @@ UPLOAD_CARD = (
     'var rows=lines.slice(1).map(function(l){var v=spl(l),o={};hdrs.forEach(function(h,i){o[h]=(v[i]||"").replace(/"/g,"").trim();});return o;});'
     'return{headers:hdrs,rows:rows};'
     '}\n'
-
     'function cuValidate(rows){'
     'var errs=[],warns=[];'
     'rows.forEach(function(r,i){'
@@ -464,7 +549,6 @@ UPLOAD_CARD = (
     'if(r.size_cm&&isNaN(parseInt(r.size_cm)))warns.push("Row "+n+": size_cm not a number"+(r.name?" ("+r.name+")":""));'
     '});return{errs:errs,warns:warns};'
     '}\n'
-
     'function cuParseAndPreview(text){'
     'var p=cuParseCSV(text),hdrs=p.headers,rows=p.rows;_rows=rows;'
     'var prev=document.getElementById("cu-preview");prev.style.display="";'
@@ -506,7 +590,6 @@ UPLOAD_CARD = (
     'document.getElementById("cu-table-wrap").innerHTML=\'<table style="width:100%;border-collapse:collapse;table-layout:fixed"><thead>\'+th+"</thead><tbody>"+tb+"</tbody></table>";'
     'if(valid.length)document.getElementById("cu-confirm").style.display="";'
     '}\n'
-
     'window.cuDoUpload=function(){'
     'document.getElementById("cu-confirm").style.display="none";'
     'document.getElementById("cu-progress").style.display="";'
@@ -520,9 +603,9 @@ UPLOAD_CARD = (
     'clearInterval(t);bar.style.width="100%";'
     'setTimeout(function(){'
     'document.getElementById("cu-progress").style.display="none";'
-    'var isErr=html.indexOf("&#10060;")>-1||html.toLowerCase().indexOf("error")>-1||html.indexOf("\\u274c")>-1;'
+    'var isErr=html.indexOf("\\u274c")>-1||html.toLowerCase().indexOf("error")>-1;'
     'if(isErr){document.getElementById("cu-errors").innerHTML=\'<div style="background:#FEF2F2;border:0.5px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:12px"><p style="font-size:12px;color:#991b1b">Server error: \'+html.replace(/<[^>]+>/g,"").trim()+"</p></div>";document.getElementById("cu-confirm").style.display="";}'
-    'else{document.getElementById("cu-success").style.display="";document.getElementById("cu-success-msg").textContent=_rows.length+" products uploaded successfully. Your catalog is live.";}'
+    'else{document.getElementById("cu-success").style.display="";document.getElementById("cu-success-msg").textContent=_rows.length+" products uploaded. Refresh to see the updated catalog.";}'
     '},350);'
     '})'
     '.catch(function(e){'
@@ -531,7 +614,6 @@ UPLOAD_CARD = (
     'document.getElementById("cu-confirm").style.display="";'
     '});'
     '};\n'
-
     'window.cuReset=function(){'
     '_csv="";_rows=[];'
     'document.getElementById("cu-preview").style.display="none";'
@@ -542,7 +624,6 @@ UPLOAD_CARD = (
     'document.getElementById("cu-dz-title").textContent="Drop your CSV here, or click to browse";'
     'document.getElementById("cu-dz-sub").textContent="Supports .csv files";'
     '};'
-
     '})();</script>'
 )
 
@@ -674,6 +755,21 @@ def _is_gibberish(text: str) -> bool:
         return True
     return False
 
+# Expanded stock-aware keywords so Teddy catches more natural queries
+PRODUCT_KEYWORDS = [
+    "have", "stock", "available", "sold out", "buy", "get", "find",
+    "price", "cost", "how much", "cheap", "expensive",
+    "plushie", "plush", "teddy", "bear", "unicorn", "dinosaur", "bunny", "dino",
+    "custom", "personalise", "personaliz", "order", "catalog", "catalogue", "shop",
+    "material", "size", "big", "small", "large", "soft", "safe", "kids", "baby",
+    "gift", "present", "birthday",
+]
+
+STOCK_KEYWORDS = [
+    "in stock", "out of stock", "available", "sold out", "have", "got",
+    "still", "stock", "left", "do you sell", "can i get", "can i buy",
+]
+
 @app.post("/chat", response_class=HTMLResponse)
 async def chat_post(request: Request, prompt: str = Form(...)):
     init_session(request)
@@ -731,15 +827,32 @@ async def chat_response(request: Request):
         )
 
     try:
-        product_keywords = [
-            "have","stock","buy","price","cost","plushie","teddy","bear",
-            "unicorn","dinosaur","bunny","custom","order","catalog","shop","available"
-        ]
+        q_lower = query.lower()
         enhanced_query = query
-        if any(kw in query.lower() for kw in product_keywords):
-            products = get_engine().search_products(query, max_results=5)
-            if products:
-                enhanced_query = query + "\n\n[PRODUCT INFO]\n" + get_engine().format_product_response(products)
+
+        # Stock direct lookup — runs first for specific stock questions
+        is_stock_query = any(kw in q_lower for kw in STOCK_KEYWORDS)
+        if is_stock_query:
+            stock_info = lookup_stock(query)
+            if stock_info:
+                enhanced_query = (
+                    query
+                    + "\n\n[LIVE STOCK DATA — use this to answer accurately]\n"
+                    + stock_info
+                )
+
+        # Product context — broader keyword match for general product queries
+        elif any(kw in q_lower for kw in PRODUCT_KEYWORDS):
+            try:
+                products = get_engine().search_products(query, max_results=5)
+                if products:
+                    enhanced_query = (
+                        query
+                        + "\n\n[PRODUCT INFO]\n"
+                        + get_engine().format_product_response(products)
+                    )
+            except Exception:
+                pass  # fall through to plain query if engine search fails
 
         history_for_context = load_history(session_id)
         history_for_context.append({"role": "user", "content": query})
@@ -808,7 +921,7 @@ async def clear_chat(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Admin
+# Admin — login helpers
 # ---------------------------------------------------------------------------
 def _login_page(icon: str, title: str, action: str, error: str = "") -> str:
     err_html = f'<p class="text-red-500 text-sm mt-2">{error}</p>' if error else ""
@@ -826,14 +939,57 @@ def _login_page(icon: str, title: str, action: str, error: str = "") -> str:
         '</form></div></div>'
     )
 
+
+# ---------------------------------------------------------------------------
+# Admin — live stock toggle  (HTMX POSTs here, returns updated badge)
+# ---------------------------------------------------------------------------
+@app.post("/admin/products/{product_id}/toggle-stock", response_class=HTMLResponse)
+async def toggle_stock(request: Request, product_id: str):
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    try:
+        sb = _get_supabase()
+        current = sb.table("products").select("in_stock").eq("id", product_id).single().execute().data
+        if not current:
+            return HTMLResponse("Product not found", status_code=404)
+        new_val = not current["in_stock"]
+        sb.table("products").update({"in_stock": new_val}).eq("id", product_id).execute()
+        logger.info(f"Product {product_id} stock toggled to {new_val}")
+
+        # Return just the updated badge — HTMX swaps it in place
+        if new_val:
+            return HTMLResponse(
+                f'<span id="stk-{product_id}" '
+                f'hx-post="/admin/products/{product_id}/toggle-stock" '
+                f'hx-target="#stk-{product_id}" hx-swap="outerHTML" '
+                f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold '
+                f'bg-green-100 text-green-700" title="Click to mark out of stock">'
+                f'\u2705 In stock</span>'
+            )
+        else:
+            return HTMLResponse(
+                f'<span id="stk-{product_id}" '
+                f'hx-post="/admin/products/{product_id}/toggle-stock" '
+                f'hx-target="#stk-{product_id}" hx-swap="outerHTML" '
+                f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold '
+                f'bg-red-100 text-red-600" title="Click to mark in stock">'
+                f'\u274c Out of stock</span>'
+            )
+    except Exception as e:
+        logger.error(f"toggle_stock error: {e}")
+        return HTMLResponse(f"Error: {e}", status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Admin — product upload
+# ---------------------------------------------------------------------------
 @app.post("/admin/products/upload", response_class=HTMLResponse)
 async def upload_products(request: Request, csv_data: str = Form(...)):
     if not request.session.get("admin_authenticated"):
-        return HTMLResponse('<p class="text-red-500">Not authenticated.</p>', status_code=401)
+        return HTMLResponse('\u274c Not authenticated.', status_code=401)
     try:
         import io, csv as csv_mod
-        from supabase import create_client
-        sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        sb = _get_supabase()
 
         reader = csv_mod.DictReader(io.StringIO(csv_data.strip()))
         rows = list(reader)
@@ -845,7 +1001,6 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
             return HTMLResponse('\u274c CSV must have at least: name, price')
 
         def sv(val, default=""):
-            """Safe string — treats None and blank cells as the default."""
             v = val if val is not None else default
             return str(v).strip() if str(v).strip() != "" else str(default).strip()
 
@@ -860,8 +1015,8 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
                 size_cm = int(float(sv(r.get("size_cm"), "0") or "0"))
             except (ValueError, TypeError):
                 size_cm = 0
-            in_stock     = sv(r.get("in_stock"),     "true").lower()  not in ("false", "0", "no")
-            customisable = sv(r.get("customisable"),  "false").lower() in  ("true",  "1", "yes")
+            in_stock     = sv(r.get("in_stock"),    "true").lower()  not in ("false", "0", "no")
+            customisable = sv(r.get("customisable"), "false").lower() in  ("true",  "1", "yes")
             products.append({
                 "client_id":    "tedpro_client",
                 "name":         sv(r.get("name")),
@@ -876,14 +1031,10 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
                 "sku":          sv(r.get("sku")),
             })
 
-        # Step 1: fetch existing IDs before touching anything
+        # Fetch existing IDs first — insert new, then delete old safely
         existing = sb.table("products").select("id").eq("client_id", "tedpro_client").execute().data or []
         existing_ids = [row["id"] for row in existing]
-
-        # Step 2: insert the new rows — if this throws, nothing has been deleted yet
         sb.table("products").insert(products).execute()
-
-        # Step 3: only now delete the old rows by their IDs
         if existing_ids:
             sb.table("products").delete().in_("id", existing_ids).execute()
 
@@ -899,8 +1050,8 @@ async def download_template(request: Request):
         return RedirectResponse(url="/admin", status_code=303)
     csv_content = (
         "name,category,price,currency,in_stock,description,material,size_cm,customisable,sku\n"
-        "Gentle Giant Teddy,Bears,349.00,ZAR,true,Large teddy bear for big hugs,Premium Cotton,50,true,GGT-001\n"
-        "Galaxy Star Bear,Bears,329.00,ZAR,true,Teddy with galaxy print,Premium Plush,35,true,GSB-001\n"
+        "Gentle Giant Teddy,Bears,349.00,ZAR,true,Large teddy bear for big hugs,Premium Cotton,50,true,CHB-001\n"
+        "Rainbow Unicorn,Unicorns,379.00,ZAR,true,Pastel unicorn with shimmering mane,Satin-finish Plush,40,true,CHU-001\n"
     )
     from fastapi.responses import Response
     return Response(
@@ -910,6 +1061,9 @@ async def download_template(request: Request):
     )
 
 
+# ---------------------------------------------------------------------------
+# Admin — dashboard
+# ---------------------------------------------------------------------------
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     if not request.session.get("admin_authenticated"):
@@ -931,8 +1085,7 @@ async def admin_logout(request: Request):
 
 async def _admin_dashboard(request: Request):
     try:
-        from supabase import create_client
-        sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        sb = _get_supabase()
 
         leads_count    = len(sb.table("leads").select("id", count="exact").execute().data)
         conv_count     = len(sb.table("conversations").select("id", count="exact").execute().data)
@@ -975,13 +1128,25 @@ async def _admin_dashboard(request: Request):
             f'<td class="px-4 py-2 text-sm text-[#8B6914]">{str(c.get("created_at",""))[:10]}</td></tr>'
             for c in convs_data
         )
-        products_rows = "".join(
-            f'<tr class="border-b border-[#FFE4CC]">'
-            f'<td class="px-4 py-2 text-sm text-[#2D1B00]">{p.get("name","")}</td>'
-            f'<td class="px-4 py-2 text-sm text-[#8B6914]">{p.get("category","")}</td>'
-            f'<td class="px-4 py-2 text-sm font-semibold text-[#FF922B]">{p.get("currency","ZAR")} {float(p.get("price",0)):.2f}</td>'
-            f'<td class="px-4 py-2 text-sm">{chr(9989) if p.get("in_stock") else chr(10060)}</td></tr>'
-            for p in products_data
+
+        # Product catalog — expandable rows with inline stock toggle
+        product_catalog_rows = "".join(_render_product_row(p) for p in products_data)
+        product_catalog = (
+            '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-6">'
+            '<div class="px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center">'
+            '<h2 class="font-bold text-[#2D1B00] text-sm">&#127987; Product Catalog '
+            f'<span class="ml-2 text-xs font-normal text-[#8B6914]">({products_count} products — click row to expand)</span></h2>'
+            '</div>'
+            '<div class="overflow-x-auto"><table class="w-full">'
+            '<thead class="bg-[#FFF9F4]"><tr>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">Name</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">Category</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">SKU</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">Price</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">Stock</th>'
+            '</tr></thead>'
+            '<tbody>' + (product_catalog_rows or '<tr><td colspan="5" class="px-4 py-4 text-sm text-center text-[#8B6914]">No products yet — upload a catalog below</td></tr>') + '</tbody>'
+            '</table></div></div>'
         )
 
         content = (
@@ -998,7 +1163,7 @@ async def _admin_dashboard(request: Request):
             f'</div>'
             + tbl("Recent Leads", ["Name", "Email", "Date"], leads_rows)
             + tbl("Recent Conversations", ["Message", "Date"], convs_rows)
-            + tbl("Products", ["Name", "Category", "Price", "In Stock"], products_rows)
+            + product_catalog
             + UPLOAD_CARD
             + '</div></div>'
         )
@@ -1049,8 +1214,7 @@ async def _dev_dashboard(request: Request):
         for k, v in checks.items()
     )
     try:
-        from supabase import create_client
-        sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        sb = _get_supabase()
         sb.table("qa_cache").select("id").limit(1).execute()
         db_status = '<span class="text-green-600 font-semibold">\u2705 Connected</span>'
     except Exception as e:
