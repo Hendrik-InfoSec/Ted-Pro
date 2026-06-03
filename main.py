@@ -438,8 +438,9 @@ def _render_product_row(p: dict) -> str:
     sku     = p.get("sku", "—")
     qty     = p.get("stock_quantity") or 0
 
-    # Stock badge — clickable toggle
+    # Stock badge — clickable toggle (wrapped to stop propagation)
     stk_badge = (
+        f'<span onclick="event.stopPropagation()">'
         f'<span id="stk-{pid}" '
         f'hx-post="/admin/products/{pid}/toggle-stock" '
         f'hx-target="#stk-{pid}" '
@@ -452,21 +453,23 @@ def _render_product_row(p: dict) -> str:
             'bg-red-100 text-red-600" title="Click to mark in stock">'
             '\u274c Out of stock'
         )
-        + '</span>'
+        + '</span></span>'
     )
 
-    # Qty cell — inline editable via HTMX
+    # Qty cell — inline editable (wrapped to stop propagation)
     qty_display = (
+        f'<span onclick="event.stopPropagation()">'
         f'<span id="qty-display-{pid}" class="font-mono text-sm text-[#2D1B00]">'
         f'{qty} units '
         f'<button onclick="event.stopPropagation();qtyEdit(\'{pid}\',{qty})" '
         f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
-        f'</span>'
+        f'</span></span>'
     )
 
+    # Main row — click on NAME cell only to expand, not the whole row
     main_row = (
-        f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5] cursor-pointer" onclick="toggleRow(\'{pid}\')">'
-        f'<td class="px-4 py-3 text-sm font-semibold text-[#2D1B00]">'
+        f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
+        f'<td class="px-4 py-3 text-sm font-semibold text-[#2D1B00] cursor-pointer" onclick="toggleRow(\'{pid}\')">'
         f'<span class="text-[#FF922B] mr-2 text-xs">&#9654;</span>{name}</td>'
         f'<td class="px-4 py-3 text-sm text-[#8B6914]">{cat}</td>'
         f'<td class="px-4 py-3 text-sm text-[#8B6914] font-mono">{sku}</td>'
@@ -494,7 +497,6 @@ def _render_product_row(p: dict) -> str:
     )
 
     return main_row + detail_row
-
 
 # ---------------------------------------------------------------------------
 # Upload card — drag-drop CSV uploader
