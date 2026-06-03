@@ -168,15 +168,17 @@ DEV_PASSWORD   = _safe_password("DEV_PASSWORD")
 # ---------------------------------------------------------------------------
 # Stock lookup — used by Teddy to answer "is X in stock?" reliably
 # ---------------------------------------------------------------------------
+SCARCITY_THRESHOLD = 10  # Teddy mentions qty only when stock is this low or below
+
 def lookup_stock(query: str) -> str | None:
     """
     Direct Supabase product lookup for stock queries.
-    Returns a plain-text answer string, or None if no match found.
+    Scarcity rule: only reveal quantity to Teddy when <= SCARCITY_THRESHOLD units remain.
     """
     try:
         sb = _get_supabase()
         all_products = sb.table("products").select(
-            "name, in_stock, price, currency, category, size_cm, material, sku"
+            "name, in_stock, stock_quantity, price, currency, category, size_cm, material, sku"
         ).eq("client_id", "tedpro_client").execute().data or []
 
         q = query.lower()
@@ -189,11 +191,22 @@ def lookup_stock(query: str) -> str | None:
 
         lines = []
         for p in matches[:5]:
-            stock_str = "In stock \u2705" if p.get("in_stock") else "Out of stock \u274c"
+            in_stk = p.get("in_stock", True)
+            qty    = p.get("stock_quantity") or 0
+
+            if not in_stk:
+                stock_str = ("Out of stock \u274c — do NOT promise availability, "
+                             "suggest the customer check back soon or ask about similar items")
+            elif qty > 0 and qty <= SCARCITY_THRESHOLD:
+                stock_str = (f"In stock \u2705 — only {qty} left, "
+                             "mention this casually to create urgency without being pushy")
+            else:
+                stock_str = "In stock \u2705 — available, do NOT mention quantity"
+
             lines.append(
                 f"**{p['name']}** ({p.get('category','')}) — "
                 f"{p.get('currency','ZAR')} {float(p.get('price',0)):.2f} — {stock_str} — "
-                f"SKU: {p.get('sku','')} — Size: {p.get('size_cm','')}cm — {p.get('material','')}"
+                f"Size: {p.get('size_cm','')}cm — {p.get('material','')}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -256,6 +269,40 @@ function toggleRow(id) {{
   var el = document.getElementById('detail-' + id);
   if (!el) return;
   el.classList.toggle('open');
+}}
+function qtyEdit(pid, current) {{
+  var cell = document.getElementById('qty-display-' + pid);
+  if (!cell) return;
+  cell.innerHTML =
+    '<input id="qty-input-' + pid + '" type="number" min="0" value="' + current + '" '
+    + 'style="width:70px;padding:3px 6px;border:1px solid #FFD5A5;border-radius:6px;font-size:13px;font-family:inherit" '
+    + 'onclick="event.stopPropagation()">'
+    + '<button onclick="event.stopPropagation();qtySave(\'' + pid + '\')" '
+    + 'style="margin-left:6px;padding:3px 10px;background:#FF922B;color:white;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Save</button>'
+    + '<button onclick="event.stopPropagation();qtyCancel(\'' + pid + '\',' + current + ')" '
+    + 'style="margin-left:4px;padding:3px 8px;background:white;color:#8B6914;border:1px solid #FFD5A5;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button>';
+}}
+function qtySave(pid) {{
+  var input = document.getElementById('qty-input-' + pid);
+  if (!input) return;
+  var val = parseInt(input.value);
+  if (isNaN(val) || val < 0) {{ alert('Please enter a valid number'); return; }}
+  fetch('/admin/products/' + pid + '/update-qty', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    credentials: 'same-origin',
+    body: 'qty=' + val
+  }}).then(function(r) {{ return r.text(); }}).then(function(html) {{
+    var cell = document.getElementById('qty-display-' + pid);
+    if (cell) cell.outerHTML = html;
+  }}).catch(function(e) {{ alert('Save failed: ' + e.message); }});
+}}
+function qtyCancel(pid, original) {{
+  var cell = document.getElementById('qty-display-' + pid);
+  if (!cell) return;
+  cell.innerHTML = original + ' units '
+    + '<button onclick="event.stopPropagation();qtyEdit(\'' + pid + '\',' + original + ')" '
+    + 'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>';
 }}
 </script>
 </head>
@@ -389,7 +436,9 @@ def _render_product_row(p: dict) -> str:
     size    = p.get("size_cm", "—")
     custom  = p.get("customisable", False)
     sku     = p.get("sku", "—")
+    qty     = p.get("stock_quantity") or 0
 
+    # Stock badge — clickable toggle
     stk_badge = (
         f'<span id="stk-{pid}" '
         f'hx-post="/admin/products/{pid}/toggle-stock" '
@@ -406,6 +455,15 @@ def _render_product_row(p: dict) -> str:
         + '</span>'
     )
 
+    # Qty cell — inline editable via HTMX
+    qty_display = (
+        f'<span id="qty-display-{pid}" class="font-mono text-sm text-[#2D1B00]">'
+        f'{qty} units '
+        f'<button onclick="event.stopPropagation();qtyEdit(\'{pid}\',{qty})" '
+        f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
+        f'</span>'
+    )
+
     main_row = (
         f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5] cursor-pointer" onclick="toggleRow(\'{pid}\')">'
         f'<td class="px-4 py-3 text-sm font-semibold text-[#2D1B00]">'
@@ -413,7 +471,7 @@ def _render_product_row(p: dict) -> str:
         f'<td class="px-4 py-3 text-sm text-[#8B6914]">{cat}</td>'
         f'<td class="px-4 py-3 text-sm text-[#8B6914] font-mono">{sku}</td>'
         f'<td class="px-4 py-3 text-sm font-semibold text-[#FF922B]">{cur} {price:.2f}</td>'
-        f'<td class="px-4 py-3 text-sm">{stk_badge}</td>'
+        f'<td class="px-4 py-3 text-sm">{stk_badge}<br><span class="mt-1 inline-block">{qty_display}</span></td>'
         f'</tr>'
     )
 
@@ -941,6 +999,30 @@ def _login_page(icon: str, title: str, action: str, error: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Admin — update stock quantity inline
+# ---------------------------------------------------------------------------
+@app.post("/admin/products/{product_id}/update-qty", response_class=HTMLResponse)
+async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    try:
+        sb = _get_supabase()
+        sb.table("products").update({"stock_quantity": qty}).eq("id", product_id).execute()
+        logger.info(f"Product {product_id} qty updated to {qty}")
+        # Return the updated qty display span so HTMX swaps it in place
+        return HTMLResponse(
+            f'<span id="qty-display-{product_id}" class="font-mono text-sm text-[#2D1B00]">'
+            f'{qty} units '
+            f'<button onclick="event.stopPropagation();qtyEdit(\'{product_id}\',{qty})" '
+            f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
+            f'</span>'
+        )
+    except Exception as e:
+        logger.error(f"update_qty error: {e}")
+        return HTMLResponse(f"Error: {e}", status_code=500)
+
+
+# ---------------------------------------------------------------------------
 # Admin — live stock toggle  (HTMX POSTs here, returns updated badge)
 # ---------------------------------------------------------------------------
 @app.post("/admin/products/{product_id}/toggle-stock", response_class=HTMLResponse)
@@ -1017,18 +1099,24 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
                 size_cm = 0
             in_stock     = sv(r.get("in_stock"),    "true").lower()  not in ("false", "0", "no")
             customisable = sv(r.get("customisable"), "false").lower() in  ("true",  "1", "yes")
+            try:
+                stock_quantity = int(float(sv(r.get("stock_quantity"), "0") or "0"))
+            except (ValueError, TypeError):
+                stock_quantity = 0
+
             products.append({
-                "client_id":    "tedpro_client",
-                "name":         sv(r.get("name")),
-                "category":     sv(r.get("category")),
-                "price":        price,
-                "currency":     sv(r.get("currency"), "ZAR"),
-                "in_stock":     in_stock,
-                "description":  sv(r.get("description")),
-                "material":     sv(r.get("material")),
-                "size_cm":      size_cm,
-                "customisable": customisable,
-                "sku":          sv(r.get("sku")),
+                "client_id":      "tedpro_client",
+                "name":           sv(r.get("name")),
+                "category":       sv(r.get("category")),
+                "price":          price,
+                "currency":       sv(r.get("currency"), "ZAR"),
+                "in_stock":       in_stock,
+                "description":    sv(r.get("description")),
+                "material":       sv(r.get("material")),
+                "size_cm":        size_cm,
+                "customisable":   customisable,
+                "sku":            sv(r.get("sku")),
+                "stock_quantity": stock_quantity,
             })
 
         # Fetch existing IDs first — insert new, then delete old safely
@@ -1049,9 +1137,9 @@ async def download_template(request: Request):
     if not request.session.get("admin_authenticated"):
         return RedirectResponse(url="/admin", status_code=303)
     csv_content = (
-        "name,category,price,currency,in_stock,description,material,size_cm,customisable,sku\n"
-        "Gentle Giant Teddy,Bears,349.00,ZAR,true,Large teddy bear for big hugs,Premium Cotton,50,true,CHB-001\n"
-        "Rainbow Unicorn,Unicorns,379.00,ZAR,true,Pastel unicorn with shimmering mane,Satin-finish Plush,40,true,CHU-001\n"
+        "name,category,price,currency,in_stock,stock_quantity,description,material,size_cm,customisable,sku\n"
+        "Gentle Giant Teddy,Bears,349.00,ZAR,true,50,Large teddy bear for big hugs,Premium Cotton,50,true,CHB-001\n"
+        "Rainbow Unicorn,Unicorns,379.00,ZAR,true,30,Pastel unicorn with shimmering mane,Satin-finish Plush,40,true,CHU-001\n"
     )
     from fastapi.responses import Response
     return Response(
