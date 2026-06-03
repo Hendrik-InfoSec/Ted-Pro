@@ -438,14 +438,14 @@ def _render_product_row(p: dict) -> str:
     sku     = p.get("sku", "—")
     qty     = p.get("stock_quantity") or 0
 
-    # Stock badge — clickable toggle (wrapped to stop propagation)
+    # Stock badge — stopPropagation ON the element itself, not a wrapper
     stk_badge = (
-        f'<span onclick="event.stopPropagation()">'
         f'<span id="stk-{pid}" '
         f'hx-post="/admin/products/{pid}/toggle-stock" '
         f'hx-target="#stk-{pid}" '
         f'hx-swap="outerHTML" '
-        f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold '
+        f'onclick="event.stopPropagation()" '
+        f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold cursor-pointer '
         + (
             'bg-green-100 text-green-700" title="Click to mark out of stock">'
             '\u2705 In stock'
@@ -453,20 +453,19 @@ def _render_product_row(p: dict) -> str:
             'bg-red-100 text-red-600" title="Click to mark in stock">'
             '\u274c Out of stock'
         )
-        + '</span></span>'
+        + '</span>'
     )
 
-    # Qty cell — inline editable (wrapped to stop propagation)
+    # Qty cell — stopPropagation ON the element itself
     qty_display = (
-        f'<span onclick="event.stopPropagation()">'
-        f'<span id="qty-display-{pid}" class="font-mono text-sm text-[#2D1B00]">'
+        f'<span id="qty-display-{pid}" class="font-mono text-sm text-[#2D1B00]" onclick="event.stopPropagation()">'
         f'{qty} units '
         f'<button onclick="event.stopPropagation();qtyEdit(\'{pid}\',{qty})" '
         f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
-        f'</span></span>'
+        f'</span>'
     )
 
-    # Main row — click on NAME cell only to expand, not the whole row
+    # Main row — click on NAME cell only to expand
     main_row = (
         f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
         f'<td class="px-4 py-3 text-sm font-semibold text-[#2D1B00] cursor-pointer" onclick="toggleRow(\'{pid}\')">'
@@ -497,10 +496,6 @@ def _render_product_row(p: dict) -> str:
     )
 
     return main_row + detail_row
-
-# ---------------------------------------------------------------------------
-# Upload card — drag-drop CSV uploader
-# ---------------------------------------------------------------------------
 UPLOAD_CARD = (
     '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-6">'
     '<div class="px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center">'
@@ -1013,7 +1008,7 @@ async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
         logger.info(f"Product {product_id} qty updated to {qty}")
         # Return the updated qty display span so HTMX swaps it in place
         return HTMLResponse(
-            f'<span id="qty-display-{product_id}" class="font-mono text-sm text-[#2D1B00]">'
+            f'<span id="qty-display-{product_id}" class="font-mono text-sm text-[#2D1B00]" onclick="event.stopPropagation()">'
             f'{qty} units '
             f'<button onclick="event.stopPropagation();qtyEdit(\'{product_id}\',{qty})" '
             f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
@@ -1022,11 +1017,6 @@ async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
     except Exception as e:
         logger.error(f"update_qty error: {e}")
         return HTMLResponse(f"Error: {e}", status_code=500)
-
-
-# ---------------------------------------------------------------------------
-# Admin — live stock toggle  (HTMX POSTs here, returns updated badge)
-# ---------------------------------------------------------------------------
 @app.post("/admin/products/{product_id}/toggle-stock", response_class=HTMLResponse)
 async def toggle_stock(request: Request, product_id: str):
     if not request.session.get("admin_authenticated"):
@@ -1046,7 +1036,8 @@ async def toggle_stock(request: Request, product_id: str):
                 f'<span id="stk-{product_id}" '
                 f'hx-post="/admin/products/{product_id}/toggle-stock" '
                 f'hx-target="#stk-{product_id}" hx-swap="outerHTML" '
-                f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold '
+                f'onclick="event.stopPropagation()" '
+                f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold cursor-pointer '
                 f'bg-green-100 text-green-700" title="Click to mark out of stock">'
                 f'\u2705 In stock</span>'
             )
@@ -1055,18 +1046,14 @@ async def toggle_stock(request: Request, product_id: str):
                 f'<span id="stk-{product_id}" '
                 f'hx-post="/admin/products/{product_id}/toggle-stock" '
                 f'hx-target="#stk-{product_id}" hx-swap="outerHTML" '
-                f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold '
+                f'onclick="event.stopPropagation()" '
+                f'class="stock-toggle inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold cursor-pointer '
                 f'bg-red-100 text-red-600" title="Click to mark in stock">'
                 f'\u274c Out of stock</span>'
             )
     except Exception as e:
         logger.error(f"toggle_stock error: {e}")
         return HTMLResponse(f"Error: {e}", status_code=500)
-
-
-# ---------------------------------------------------------------------------
-# Admin — product upload
-# ---------------------------------------------------------------------------
 @app.post("/admin/products/upload", response_class=HTMLResponse)
 async def upload_products(request: Request, csv_data: str = Form(...)):
     if not request.session.get("admin_authenticated"):
