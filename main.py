@@ -216,6 +216,54 @@ def lookup_stock(query: str) -> str | None:
 # ---------------------------------------------------------------------------
 # HTML helpers
 # ---------------------------------------------------------------------------
+# Admin JS lives outside BASE_HTML so it is NOT processed by .format()
+# and curly braces in the JS are preserved exactly as written.
+ADMIN_JS = """
+<script>
+function toggleRow(id) {
+  var el = document.getElementById('detail-' + id);
+  var arrow = document.getElementById('arrow-' + id);
+  if (!el) return;
+  el.classList.toggle('open');
+  if (arrow) arrow.style.transform = el.classList.contains('open') ? 'rotate(90deg)' : 'rotate(0deg)';
+}
+function qtyEdit(pid, current) {
+  var cell = document.getElementById('qty-display-' + pid);
+  if (!cell) return;
+  cell.innerHTML =
+    '<input id="qty-input-' + pid + '" type="number" min="0" value="' + current + '" '
+    + 'style="width:70px;padding:3px 6px;border:1px solid #FFD5A5;border-radius:6px;font-size:13px;font-family:inherit" '
+    + 'onclick="event.stopPropagation()">'
+    + '<button onclick="event.stopPropagation();qtySave(\'' + pid + '\')" '
+    + 'style="margin-left:6px;padding:3px 10px;background:#FF922B;color:white;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Save</button>'
+    + '<button onclick="event.stopPropagation();qtyCancel(\'' + pid + '\',' + current + ')" '
+    + 'style="margin-left:4px;padding:3px 8px;background:white;color:#8B6914;border:1px solid #FFD5A5;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button>';
+}
+function qtySave(pid) {
+  var input = document.getElementById('qty-input-' + pid);
+  if (!input) return;
+  var val = parseInt(input.value);
+  if (isNaN(val) || val < 0) { alert('Please enter a valid number'); return; }
+  fetch('/admin/products/' + pid + '/update-qty', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    credentials: 'same-origin',
+    body: 'qty=' + val
+  }).then(function(r) { return r.text(); }).then(function(html) {
+    var cell = document.getElementById('qty-display-' + pid);
+    if (cell) cell.outerHTML = html;
+  }).catch(function(e) { alert('Save failed: ' + e.message); });
+}
+function qtyCancel(pid, original) {
+  var cell = document.getElementById('qty-display-' + pid);
+  if (!cell) return;
+  cell.innerHTML = original + ' units '
+    + '<button onclick="event.stopPropagation();qtyEdit(\'' + pid + '\',' + original + ')" '
+    + 'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>';
+}
+</script>
+"""
+
 BASE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -246,7 +294,6 @@ body {{ font-family: 'Quicksand', sans-serif; background: #FFF9F4; }}
 .prose em {{ font-style: italic; color: #5A3A1B; }}
 .prose code {{ background: #FFF0DB; color: #c7440a; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }}
 .prose h1,.prose h2,.prose h3 {{ font-weight: 700; color: #2D1B00; margin: 0.5em 0 0.25em; }}
-/* Product catalog admin styles */
 .product-row-detail {{ display:none; }}
 .product-row-detail.open {{ display:table-row; }}
 .stock-toggle {{ cursor:pointer; transition: opacity .15s; }}
@@ -265,56 +312,20 @@ document.addEventListener('htmx:afterSwap', function(e) {{
 document.addEventListener('htmx:afterSettle', function(e) {{
   setTimeout(scrollChat, 100);
 }});
-function toggleRow(id) {{
-  var el = document.getElementById('detail-' + id);
-  var arrow = document.getElementById('arrow-' + id);
-  if (!el) return;
-  el.classList.toggle('open');
-  if (arrow) arrow.style.transform = el.classList.contains('open') ? 'rotate(90deg)' : 'rotate(0deg)';
-}}
-function qtyEdit(pid, current) {{
-  var cell = document.getElementById('qty-display-' + pid);
-  if (!cell) return;
-  cell.innerHTML =
-    '<input id="qty-input-' + pid + '" type="number" min="0" value="' + current + '" '
-    + 'style="width:70px;padding:3px 6px;border:1px solid #FFD5A5;border-radius:6px;font-size:13px;font-family:inherit" '
-    + 'onclick="event.stopPropagation()">'
-    + '<button onclick="event.stopPropagation();qtySave(\'' + pid + '\')" '
-    + 'style="margin-left:6px;padding:3px 10px;background:#FF922B;color:white;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Save</button>'
-    + '<button onclick="event.stopPropagation();qtyCancel(\'' + pid + '\',' + current + ')" '
-    + 'style="margin-left:4px;padding:3px 8px;background:white;color:#8B6914;border:1px solid #FFD5A5;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button>';
-}}
-function qtySave(pid) {{
-  var input = document.getElementById('qty-input-' + pid);
-  if (!input) return;
-  var val = parseInt(input.value);
-  if (isNaN(val) || val < 0) {{ alert('Please enter a valid number'); return; }}
-  fetch('/admin/products/' + pid + '/update-qty', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    credentials: 'same-origin',
-    body: 'qty=' + val
-  }}).then(function(r) {{ return r.text(); }}).then(function(html) {{
-    var cell = document.getElementById('qty-display-' + pid);
-    if (cell) cell.outerHTML = html;
-  }}).catch(function(e) {{ alert('Save failed: ' + e.message); }});
-}}
-function qtyCancel(pid, original) {{
-  var cell = document.getElementById('qty-display-' + pid);
-  if (!cell) return;
-  cell.innerHTML = original + ' units '
-    + '<button onclick="event.stopPropagation();qtyEdit(\'' + pid + '\',' + original + ')" '
-    + 'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>';
-}}
 </script>
+{admin_js}
 </head>
 <body class="min-h-screen" onload="scrollChat()">
 {content}
 </body>
 </html>"""
 
-def render_page(title: str, content: str) -> str:
-    return BASE_HTML.format(title=title, content=content)
+def render_page(title: str, content: str, include_admin_js: bool = False) -> str:
+    return BASE_HTML.format(
+        title=title,
+        content=content,
+        admin_js=ADMIN_JS if include_admin_js else ""
+    )
 
 def error_page(code: int, heading: str, message: str) -> str:
     content = (
@@ -1160,7 +1171,7 @@ async def download_template(request: Request):
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     if not request.session.get("admin_authenticated"):
-        return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", "Admin Access", "/admin/login")))
+        return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", "Admin Access", "/admin/login"), include_admin_js=True))
     return await _admin_dashboard(request)
 
 @app.post("/admin/login", response_class=HTMLResponse)
@@ -1169,7 +1180,7 @@ async def admin_login(request: Request, password: str = Form(...)):
         request.session["admin_authenticated"] = True
         return RedirectResponse(url="/admin", status_code=303)
     return HTMLResponse(content=render_page("Admin Login",
-        _login_page("\U0001f512", "Admin Access", "/admin/login", "Incorrect password.")))
+        _login_page("\U0001f512", "Admin Access", "/admin/login", "Incorrect password."), include_admin_js=True))
 
 @app.get("/admin/logout")
 async def admin_logout(request: Request):
@@ -1260,7 +1271,7 @@ async def _admin_dashboard(request: Request):
             + UPLOAD_CARD
             + '</div></div>'
         )
-        return HTMLResponse(content=render_page("Admin Dashboard", content))
+        return HTMLResponse(content=render_page("Admin Dashboard", content, include_admin_js=True))
     except Exception as e:
         logger.error(f"Admin error: {e}")
         return HTMLResponse(f'<div class="p-8 text-red-500">Dashboard error: {e}</div>')
