@@ -32,7 +32,8 @@ app.add_middleware(
     secret_key=os.environ.get("SECRET_KEY", "tedpro-fallback-secret")
 )
 
-os.makedirs("static", exist_ok=True)
+if not os.path.isdir("static"):
+    os.makedirs("static")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ---------------------------------------------------------------------------
