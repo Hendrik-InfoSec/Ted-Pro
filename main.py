@@ -427,7 +427,8 @@ def _render_product_row(p: dict) -> str:
     qty_display = (
         f'<span id="qty-display-{pid}" class="font-mono text-sm text-[#2D1B00]">'
         f'{qty} units '
-        f'<button onclick="event.stopPropagation();qtyEdit(\'{pid}\',{qty})" '
+        f'<button onclick="event.stopPropagation();qtyEdit(this.dataset.pid,this.dataset.qty)" '
+        f'data-pid="{pid}" data-qty="{qty}" '
         f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
         f'</span>'
     )
@@ -673,18 +674,17 @@ function toggleRow(id) {
 function qtyEdit(pid, current) {
   var cell = document.getElementById('qty-display-' + pid);
   if (!cell) return;
-  var saveCmd = 'event.stopPropagation();qtySave("' + pid + '")';
-  var cancelCmd = 'event.stopPropagation();qtyCancel("' + pid + '",' + current + ')';
   cell.innerHTML =
     '<input id="qty-input-' + pid + '" type="number" min="0" value="' + current + '"'
     + ' style="width:70px;padding:3px 6px;border:1px solid #FFD5A5;border-radius:6px;font-size:13px"'
     + ' onclick="event.stopPropagation()">'
-    + '<button onclick="' + saveCmd + '"'
+    + '<button onclick="event.stopPropagation();qtySave(this)" data-pid="' + pid + '"'
     + ' style="margin-left:6px;padding:3px 10px;background:#FF922B;color:white;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Save</button>'
-    + '<button onclick="' + cancelCmd + '"'
+    + '<button onclick="event.stopPropagation();qtyCancel(this,' + current + ')" data-pid="' + pid + '"'
     + ' style="margin-left:4px;padding:3px 8px;background:white;color:#8B6914;border:1px solid #FFD5A5;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button>';
 }
-function qtySave(pid) {
+function qtySave(btn) {
+  var pid = btn.getAttribute('data-pid');
   var input = document.getElementById('qty-input-' + pid);
   if (!input) return;
   var val = parseInt(input.value);
@@ -699,14 +699,15 @@ function qtySave(pid) {
     if (cell) cell.outerHTML = html;
   }).catch(function(e) { alert('Save failed: ' + e.message); });
 }
-function qtyCancel(pid, original) {
+function qtyCancel(btn, original) {
+  var pid = btn.getAttribute('data-pid');
   var cell = document.getElementById('qty-display-' + pid);
   if (!cell) return;
-  var editCmd = 'event.stopPropagation();qtyEdit("' + pid + '",' + original + ')';
   cell.innerHTML = original + ' units '
-    + '<button onclick="' + editCmd + '"'
+    + '<button onclick="event.stopPropagation();qtyEdit(this.getAttribute('data-pid'),this.getAttribute('data-qty'))" data-pid="' + pid + '" data-qty="' + original + '"'
     + ' style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>';
 }
+
 """
     return Response(content=js, media_type="application/javascript")
 
@@ -1039,7 +1040,8 @@ async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
         return HTMLResponse(
             f'<span id="qty-display-{product_id}" class="font-mono text-sm text-[#2D1B00]">'
             f'{qty} units '
-            f'<button onclick="event.stopPropagation();qtyEdit(\'{product_id}\',{qty})" '
+            f'<button onclick="event.stopPropagation();qtyEdit(this.dataset.pid,this.dataset.qty)" '
+            f'data-pid="{product_id}" data-qty="{qty}" '
             f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
             f'</span>'
         )
