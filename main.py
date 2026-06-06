@@ -427,8 +427,7 @@ def _render_product_row(p: dict) -> str:
     qty_display = (
         f'<span id="qty-display-{pid}" class="font-mono text-sm text-[#2D1B00]">'
         f'{qty} units '
-        f'<button onclick="event.stopPropagation();qtyEdit(this.dataset.pid,this.dataset.qty)" '
-        f'data-pid="{pid}" data-qty="{qty}" '
+        f'<button onclick="event.stopPropagation();showEditUI(\'{pid}\',{qty})" '
         f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
         f'</span>'
     )
@@ -663,52 +662,60 @@ UPLOAD_CARD = (
 @app.get("/js/admin")
 async def serve_admin_js():
     from fastapi.responses import Response
-    js = """
-function toggleRow(id) {
-  var el = document.getElementById('detail-' + id);
-  var arrow = document.getElementById('arrow-' + id);
-  if (!el) return;
-  el.classList.toggle('open');
-  if (arrow) arrow.style.transform = el.classList.contains('open') ? 'rotate(90deg)' : 'rotate(0deg)';
-}
-function qtyEdit(pid, current) {
-  var cell = document.getElementById('qty-display-' + pid);
-  if (!cell) return;
-  cell.innerHTML =
-    '<input id="qty-input-' + pid + '" type="number" min="0" value="' + current + '"'
-    + ' style="width:70px;padding:3px 6px;border:1px solid #FFD5A5;border-radius:6px;font-size:13px"'
-    + ' onclick="event.stopPropagation()">'
-    + '<button onclick="event.stopPropagation();qtySave(this)" data-pid="' + pid + '"'
-    + ' style="margin-left:6px;padding:3px 10px;background:#FF922B;color:white;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Save</button>'
-    + '<button onclick="event.stopPropagation();qtyCancel(this,' + current + ')" data-pid="' + pid + '"'
-    + ' style="margin-left:4px;padding:3px 8px;background:white;color:#8B6914;border:1px solid #FFD5A5;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button>';
-}
-function qtySave(btn) {
-  var pid = btn.getAttribute('data-pid');
-  var input = document.getElementById('qty-input-' + pid);
-  if (!input) return;
-  var val = parseInt(input.value);
-  if (isNaN(val) || val < 0) { alert('Please enter a valid number'); return; }
-  fetch('/admin/products/' + pid + '/update-qty', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    credentials: 'same-origin',
-    body: 'qty=' + val
-  }).then(function(r) { return r.text(); }).then(function(html) {
-    var cell = document.getElementById('qty-display-' + pid);
-    if (cell) cell.outerHTML = html;
-  }).catch(function(e) { alert('Save failed: ' + e.message); });
-}
-function qtyCancel(btn, original) {
-  var pid = btn.getAttribute('data-pid');
-  var cell = document.getElementById('qty-display-' + pid);
-  if (!cell) return;
-  cell.innerHTML = original + ' units '
-    + '<button onclick="event.stopPropagation();qtyEdit(this.getAttribute('data-pid'),this.getAttribute('data-qty'))" data-pid="' + pid + '" data-qty="' + original + '"'
-    + ' style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>';
-}
-
-"""
+    js = (
+        "function toggleRow(id) {\n"
+        "  var el = document.getElementById('detail-' + id);\n"
+        "  var arrow = document.getElementById('arrow-' + id);\n"
+        "  if (!el) return;\n"
+        "  el.classList.toggle('open');\n"
+        "  if (arrow) arrow.style.transform = el.classList.contains('open') ? 'rotate(90deg)' : 'rotate(0deg)';\n"
+        "}\n"
+        "function showEditUI(pid, current) {\n"
+        "  var cell = document.getElementById('qty-display-' + pid);\n"
+        "  if (!cell) return;\n"
+        "  var inp = document.createElement('input');\n"
+        "  inp.id = 'qty-input-' + pid;\n"
+        "  inp.type = 'number'; inp.min = 0; inp.value = current;\n"
+        "  inp.style.cssText = 'width:70px;padding:3px 6px;border:1px solid #FFD5A5;border-radius:6px;font-size:13px';\n"
+        "  inp.onclick = function(e){ e.stopPropagation(); };\n"
+        "  var saveBtn = document.createElement('button');\n"
+        "  saveBtn.textContent = 'Save';\n"
+        "  saveBtn.style.cssText = 'margin-left:6px;padding:3px 10px;background:#FF922B;color:white;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer';\n"
+        "  saveBtn.onclick = function(e){ e.stopPropagation(); doSave(pid); };\n"
+        "  var cancelBtn = document.createElement('button');\n"
+        "  cancelBtn.textContent = 'Cancel';\n"
+        "  cancelBtn.style.cssText = 'margin-left:4px;padding:3px 8px;background:white;color:#8B6914;border:1px solid #FFD5A5;border-radius:6px;font-size:12px;cursor:pointer';\n"
+        "  cancelBtn.onclick = function(e){ e.stopPropagation(); showDisplayUI(pid, current); };\n"
+        "  cell.innerHTML = '';\n"
+        "  cell.appendChild(inp); cell.appendChild(saveBtn); cell.appendChild(cancelBtn);\n"
+        "}\n"
+        "function doSave(pid) {\n"
+        "  var input = document.getElementById('qty-input-' + pid);\n"
+        "  if (!input) return;\n"
+        "  var val = parseInt(input.value);\n"
+        "  if (isNaN(val) || val < 0) { alert('Please enter a valid number'); return; }\n"
+        "  fetch('/admin/products/' + pid + '/update-qty', {\n"
+        "    method: 'POST',\n"
+        "    headers: {'Content-Type': 'application/x-www-form-urlencoded'},\n"
+        "    credentials: 'same-origin',\n"
+        "    body: 'qty=' + val\n"
+        "  }).then(function(r){ return r.text(); }).then(function(html){\n"
+        "    var cell = document.getElementById('qty-display-' + pid);\n"
+        "    if (cell) cell.outerHTML = html;\n"
+        "  }).catch(function(e){ alert('Save failed: ' + e.message); });\n"
+        "}\n"
+        "function showDisplayUI(pid, qty) {\n"
+        "  var cell = document.getElementById('qty-display-' + pid);\n"
+        "  if (!cell) return;\n"
+        "  var txt = document.createTextNode(qty + ' units ');\n"
+        "  var btn = document.createElement('button');\n"
+        "  btn.textContent = 'edit';\n"
+        "  btn.style.cssText = 'font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer';\n"
+        "  btn.onclick = function(e){ e.stopPropagation(); showEditUI(pid, qty); };\n"
+        "  cell.innerHTML = '';\n"
+        "  cell.appendChild(txt); cell.appendChild(btn);\n"
+        "}\n"
+    )
     return Response(content=js, media_type="application/javascript")
 
 
@@ -1040,8 +1047,7 @@ async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
         return HTMLResponse(
             f'<span id="qty-display-{product_id}" class="font-mono text-sm text-[#2D1B00]">'
             f'{qty} units '
-            f'<button onclick="event.stopPropagation();qtyEdit(this.dataset.pid,this.dataset.qty)" '
-            f'data-pid="{product_id}" data-qty="{qty}" '
+            f'<button onclick="event.stopPropagation();showEditUI(\'{product_id}\',{qty})" '
             f'style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>'
             f'</span>'
         )
