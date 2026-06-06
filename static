@@ -1,3 +1,4 @@
+admin.js
 function toggleRow(id) {
   var el = document.getElementById('detail-' + id);
   var arrow = document.getElementById('arrow-' + id);
