@@ -10,7 +10,6 @@ from email.mime.multipart import MIMEMultipart
 
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.exception_handlers import http_exception_handler
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -32,11 +31,7 @@ app.add_middleware(
     secret_key=os.environ.get("SECRET_KEY", "tedpro-fallback-secret")
 )
 
-try:
-    os.mkdir("static")
-except FileExistsError:
-    pass
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Static files served via route — no folder needed
 
 # ---------------------------------------------------------------------------
 # Engine — lazy init
@@ -221,7 +216,7 @@ def lookup_stock(query: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Admin JS lives outside BASE_HTML so it is NOT processed by .format()
 # and curly braces in the JS are preserved exactly as written.
-ADMIN_JS = '<script src="/static/admin.js"></script>'
+ADMIN_JS = '<script src="/js/admin"></script>'
 
 BASE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -659,6 +654,62 @@ UPLOAD_CARD = (
     '};'
     '})();</script>'
 )
+
+
+# ---------------------------------------------------------------------------
+# Serve admin JS — avoids needing a static folder entirely
+# ---------------------------------------------------------------------------
+@app.get("/js/admin")
+async def serve_admin_js():
+    from fastapi.responses import Response
+    js = """
+function toggleRow(id) {
+  var el = document.getElementById('detail-' + id);
+  var arrow = document.getElementById('arrow-' + id);
+  if (!el) return;
+  el.classList.toggle('open');
+  if (arrow) arrow.style.transform = el.classList.contains('open') ? 'rotate(90deg)' : 'rotate(0deg)';
+}
+function qtyEdit(pid, current) {
+  var cell = document.getElementById('qty-display-' + pid);
+  if (!cell) return;
+  var saveCmd = 'event.stopPropagation();qtySave("' + pid + '")';
+  var cancelCmd = 'event.stopPropagation();qtyCancel("' + pid + '",' + current + ')';
+  cell.innerHTML =
+    '<input id="qty-input-' + pid + '" type="number" min="0" value="' + current + '"'
+    + ' style="width:70px;padding:3px 6px;border:1px solid #FFD5A5;border-radius:6px;font-size:13px"'
+    + ' onclick="event.stopPropagation()">'
+    + '<button onclick="' + saveCmd + '"'
+    + ' style="margin-left:6px;padding:3px 10px;background:#FF922B;color:white;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Save</button>'
+    + '<button onclick="' + cancelCmd + '"'
+    + ' style="margin-left:4px;padding:3px 8px;background:white;color:#8B6914;border:1px solid #FFD5A5;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button>';
+}
+function qtySave(pid) {
+  var input = document.getElementById('qty-input-' + pid);
+  if (!input) return;
+  var val = parseInt(input.value);
+  if (isNaN(val) || val < 0) { alert('Please enter a valid number'); return; }
+  fetch('/admin/products/' + pid + '/update-qty', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    credentials: 'same-origin',
+    body: 'qty=' + val
+  }).then(function(r) { return r.text(); }).then(function(html) {
+    var cell = document.getElementById('qty-display-' + pid);
+    if (cell) cell.outerHTML = html;
+  }).catch(function(e) { alert('Save failed: ' + e.message); });
+}
+function qtyCancel(pid, original) {
+  var cell = document.getElementById('qty-display-' + pid);
+  if (!cell) return;
+  var editCmd = 'event.stopPropagation();qtyEdit("' + pid + '",' + original + ')';
+  cell.innerHTML = original + ' units '
+    + '<button onclick="' + editCmd + '"'
+    + ' style="font-size:11px;color:#FF922B;text-decoration:underline;background:none;border:none;cursor:pointer">edit</button>';
+}
+"""
+    return Response(content=js, media_type="application/javascript")
+
 
 # ---------------------------------------------------------------------------
 # Chat page — GET /
