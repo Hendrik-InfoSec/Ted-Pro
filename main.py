@@ -1272,6 +1272,19 @@ async def _admin_dashboard(request: Request):
         )
 
         # ── Tab panels ──────────────────────────────────────────────────────
+        faq_card = (
+            '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
+            '<div class="px-4 py-3 border-b border-[#FFE4CC]">'
+            '<h2 class="font-bold text-[#2D1B00] text-sm">&#129504; Teddy\'s FAQ Brain</h2></div>'
+            '<div class="p-4">'
+            '<p class="text-sm text-[#5A3A1B] mb-3">Load <strong>27 pre-written FAQs</strong> covering shipping, returns, payment, safety and gifting so Teddy answers accurately.</p>'
+            '<button hx-post="/admin/load-faqs" hx-target="#faq-result" hx-swap="innerHTML"'
+            ' style="padding:9px 20px;border-radius:8px;background:#FF922B;color:white;border:none;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">'
+            '&#129504; Load FAQs into Teddy</button>'
+            '<div id="faq-result" style="margin-top:12px"></div>'
+            '</div></div>'
+        )
+
         leads_panel = (
             '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
             '<div class="px-4 py-3 border-b border-[#FFE4CC]">'
@@ -1351,7 +1364,7 @@ async def _admin_dashboard(request: Request):
 
             # Panels sit OUTSIDE the grid — full width
             + '<div style="margin-top:1.5rem">'
-            + '<div id="panel-leads" style="display:block">' + leads_panel + '</div>'
+            + '<div id="panel-leads" style="display:block">' + faq_card + leads_panel + '</div>'
             + '<div id="panel-products" style="display:none">' + products_panel + '</div>'
             + '<div id="panel-conversations" style="display:none">' + convs_panel + '</div>'
             + '</div>'
