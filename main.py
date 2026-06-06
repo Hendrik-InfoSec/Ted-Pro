@@ -1271,22 +1271,88 @@ async def _admin_dashboard(request: Request):
             '</table></div></div>'
         )
 
+        # ── Tab panels ──────────────────────────────────────────────────────
+        leads_panel = (
+            '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
+            '<div class="px-4 py-3 border-b border-[#FFE4CC]">'
+            '<h2 class="font-bold text-[#2D1B00] text-sm">&#128101; All Leads</h2></div>'
+            '<div class="overflow-x-auto"><table class="w-full">'
+            '<thead class="bg-[#FFF9F4]"><tr>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Name</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Email</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Date</th>'
+            '</tr></thead><tbody>'
+            + (leads_rows or '<tr><td colspan="3" class="px-4 py-4 text-sm text-center text-[#8B6914]">No leads yet</td></tr>')
+            + '</tbody></table></div></div>'
+        )
+
+        products_panel = product_catalog + UPLOAD_CARD
+
+        convs_panel = (
+            '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
+            '<div class="px-4 py-3 border-b border-[#FFE4CC]">'
+            '<h2 class="font-bold text-[#2D1B00] text-sm">&#128172; Recent Conversations</h2></div>'
+            '<div class="overflow-x-auto"><table class="w-full">'
+            '<thead class="bg-[#FFF9F4]"><tr>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Message</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Date</th>'
+            '</tr></thead><tbody>'
+            + (convs_rows or '<tr><td colspan="2" class="px-4 py-4 text-sm text-center text-[#8B6914]">No conversations yet</td></tr>')
+            + '</tbody></table></div></div>'
+        )
+
+        # ── Tab card click JS (inline — tiny, no escaping issues) ───────────
+        tab_js = (
+            '<script>'
+            'function switchTab(t){'
+            '  ["leads","products","conversations"].forEach(function(id){'
+            '    document.getElementById("panel-"+id).style.display = id===t?"block":"none";'
+            '    var btn = document.getElementById("tab-"+id);'
+            '    if(id===t){'
+            '      btn.style.background="#FF922B";btn.style.color="white";'
+            '      btn.style.borderColor="#FF922B";btn.style.transform="translateY(-2px)";'
+            '      btn.style.boxShadow="0 4px 12px rgba(255,146,43,0.3)";'
+            '    } else {'
+            '      btn.style.background="white";btn.style.color="#5A3A1B";'
+            '      btn.style.borderColor="#FFE4CC";btn.style.transform="none";'
+            '      btn.style.boxShadow="0 1px 3px rgba(0,0,0,0.05)";'
+            '    }'
+            '  });'
+            '}'
+            '</script>'
+        )
+
         content = (
             '<div class="min-h-screen bg-[#FFF9F4] p-4">'
             '<div class="max-w-5xl mx-auto">'
+
+            # Header
             '<div class="flex justify-between items-center mb-6">'
             '<h1 class="text-2xl font-bold text-[#2D1B00]">\U0001f4ca Admin Dashboard</h1>'
             '<a href="/admin/logout" class="text-sm text-[#8B6914] hover:text-[#FF922B]">Logout</a></div>'
-            f'<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">'
-            f'{metric("Total Leads", leads_count)}'
-            f'{metric("Today", today_leads)}'
-            f'{metric("Conversations", conv_count)}'
-            f'{metric("Products", products_count)}'
-            f'</div>'
-            + tbl("Recent Leads", ["Name", "Email", "Date"], leads_rows)
-            + tbl("Recent Conversations", ["Message", "Date"], convs_rows)
-            + product_catalog
-            + UPLOAD_CARD
+
+            # Tab cards — clickable metric cards, Conversations last on right
+            # Tab cards
+            + '<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">'
+            + '<button id="tab-leads" onclick="switchTab(\'leads\')" style="background:#FF922B;color:white;border:2px solid #FF922B;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;transform:translateY(-2px);box-shadow:0 4px 12px rgba(255,146,43,0.3);width:100%;font-family:inherit">'
+            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.85">Total Leads</p>'
+            + f'<p style="font-size:28px;font-weight:700;margin-top:4px">{leads_count}</p></button>'
+            + '<button id="tab-today" onclick="switchTab(\'today\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
+            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Today</p>'
+            + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{today_leads}</p></button>'
+            + '<button id="tab-products" onclick="switchTab(\'products\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
+            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Products</p>'
+            + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{products_count}</p></button>'
+            + '<button id="tab-conversations" onclick="switchTab(\'conversations\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
+            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Conversations</p>'
+            + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{conv_count}</p></button>'
+
+            # Tab panels — only leads visible by default
+            + '<div id="panel-leads" style="display:block">' + leads_panel + '</div>'
+            + '<div id="panel-products" style="display:none">' + products_panel + '</div>'
+            + '<div id="panel-conversations" style="display:none">' + convs_panel + '</div>'
+
+            + tab_js
             + '</div></div>'
         )
         return HTMLResponse(content=render_page("Admin Dashboard", content, include_admin_js=True))
