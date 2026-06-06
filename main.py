@@ -1347,10 +1347,14 @@ async def _admin_dashboard(request: Request):
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Conversations</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{conv_count}</p></button>'
 
-            # Tab panels — only leads visible by default
+            + '</div>'  # close grid
+
+            # Panels sit OUTSIDE the grid — full width
+            + '<div style="margin-top:1.5rem">'
             + '<div id="panel-leads" style="display:block">' + leads_panel + '</div>'
             + '<div id="panel-products" style="display:none">' + products_panel + '</div>'
             + '<div id="panel-conversations" style="display:none">' + convs_panel + '</div>'
+            + '</div>'
 
             + tab_js
             + '</div></div>'
