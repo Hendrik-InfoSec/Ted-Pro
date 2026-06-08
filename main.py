@@ -719,6 +719,225 @@ async def serve_admin_js():
     return Response(content=js, media_type="application/javascript")
 
 
+
+# ---------------------------------------------------------------------------
+# FAQ CRUD endpoints — Supabase backed, full manager
+# ---------------------------------------------------------------------------
+
+def _build_faq_panel() -> str:
+    try:
+        sb = _get_supabase()
+        faqs = sb.table("faqs").select("*").eq("client_id", "tedpro_client")             .order("category").order("created_at").execute().data or []
+    except Exception as e:
+        logger.error(f"FAQ fetch error: {e}")
+        faqs = []
+
+    def faq_row(f):
+        fid    = f.get("id","")
+        q      = f.get("question","").replace('"',"&quot;")
+        a      = f.get("answer","").replace('"',"&quot;")
+        cat    = f.get("category","General") or "General"
+        active = f.get("active", True)
+        badge  = ('<span style="background:#DCFCE7;color:#166534;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:600">Active</span>'
+                  if active else
+                  '<span style="background:#FEE2E2;color:#991b1b;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:600">Inactive</span>')
+        tlabel = "Deactivate" if active else "Activate"
+        return (
+            f'<tr id="faq-row-{fid}" class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
+            f'<td class="px-4 py-3 text-xs text-[#8B6914] font-medium whitespace-nowrap">{cat}</td>'
+            f'<td class="px-4 py-3 text-sm text-[#2D1B00] font-medium">{f.get("question","")}</td>'
+            f'<td class="px-4 py-3 text-sm text-[#5A3A1B]"><div style="max-height:60px;overflow:hidden">{f.get("answer","")}</div></td>'
+            f'<td class="px-4 py-3">{badge}</td>'
+            f'<td class="px-4 py-3"><div style="display:flex;gap:6px;flex-wrap:wrap">'
+            f'<button onclick="faqEdit(this)" data-id="{fid}" data-q="{q}" data-a="{a}" data-cat="{cat}" '
+            f'style="padding:4px 10px;border-radius:6px;background:#FFF0DB;color:#FF922B;border:none;font-size:11px;font-weight:600;cursor:pointer">Edit</button>'
+            f'<button hx-post="/admin/faqs/{fid}/toggle" hx-target="#faq-row-{fid}" hx-swap="outerHTML" '
+            f'style="padding:4px 10px;border-radius:6px;background:#F3F4F6;color:#5A3A1B;border:none;font-size:11px;font-weight:600;cursor:pointer">{tlabel}</button>'
+            f'<button hx-delete="/admin/faqs/{fid}" hx-target="#faq-row-{fid}" hx-swap="outerHTML" hx-confirm="Delete this FAQ?" '
+            f'style="padding:4px 10px;border-radius:6px;background:#FEE2E2;color:#991b1b;border:none;font-size:11px;font-weight:600;cursor:pointer">Delete</button>'
+            f'</div></td></tr>'
+        )
+
+    rows_html = "".join(faq_row(f) for f in faqs) if faqs else (
+        '<tr><td colspan="5" class="px-4 py-8 text-center text-sm text-[#8B6914]">'
+        'No FAQs yet — add your first one below &#128071;</td></tr>'
+    )
+    cat_options = "".join(
+        f'<option value="{c}">{c}</option>'
+        for c in ["General","Shipping","Payment","Custom Orders","Returns","Safety","Gifting"]
+    )
+    return (
+        '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
+        '<div class="px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center">'
+        '<h2 class="font-bold text-[#2D1B00] text-sm">&#129504; FAQ Manager '
+        f'<span class="ml-2 text-xs font-normal text-[#8B6914]">({len(faqs)} FAQs)</span></h2></div>'
+        '<div class="overflow-x-auto"><table class="w-full">'
+        '<thead class="bg-[#FFF9F4]"><tr>'
+        '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase w-24">Category</th>'
+        '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Question</th>'
+        '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Answer</th>'
+        '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase w-20">Status</th>'
+        '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase w-44">Actions</th>'
+        '</tr></thead>'
+        f'<tbody id="faq-tbody">{rows_html}</tbody>'
+        '</table></div>'
+        '<div class="p-4 border-t border-[#FFE4CC] bg-[#FFFAF5]">'
+        '<p id="faq-form-title" class="text-sm font-bold text-[#2D1B00] mb-3">&#10133; Add New FAQ</p>'
+        '<input type="hidden" id="faq-edit-id" value="">'
+        '<div style="display:grid;grid-template-columns:160px 1fr;gap:12px;margin-bottom:12px">'
+        f'<div><label class="text-xs font-semibold text-[#8B6914] uppercase">Category</label>'
+        f'<select id="faq-cat" style="width:100%;margin-top:4px;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;background:white;color:#2D1B00;font-size:13px;font-family:inherit">{cat_options}</select></div>'
+        '<div><label class="text-xs font-semibold text-[#8B6914] uppercase">Question</label>'
+        '<input id="faq-q" type="text" placeholder="e.g. How long does delivery take?" '
+        'style="width:100%;margin-top:4px;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;background:white;color:#2D1B00;font-size:13px;box-sizing:border-box"></div></div>'
+        '<div style="margin-bottom:12px">'
+        '<label class="text-xs font-semibold text-[#8B6914] uppercase">Answer</label>'
+        '<textarea id="faq-a" rows="3" placeholder="Teddy will use this answer word for word..." '
+        'style="width:100%;margin-top:4px;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;background:white;color:#2D1B00;font-size:13px;resize:vertical;font-family:inherit;box-sizing:border-box"></textarea></div>'
+        '<div style="display:flex;gap:8px;align-items:center">'
+        '<button onclick="faqSave()" style="padding:9px 20px;border-radius:8px;background:#FF922B;color:white;border:none;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Save FAQ</button>'
+        '<button onclick="faqClear()" style="padding:9px 16px;border-radius:8px;background:white;color:#2D1B00;border:0.5px solid #FFD5A5;font-size:13px;cursor:pointer;font-family:inherit">Clear</button>'
+        '<span id="faq-msg" style="font-size:13px;margin-left:8px"></span></div></div>'
+        '<script>'
+        'function faqEdit(btn){'
+        '  document.getElementById("faq-edit-id").value=btn.dataset.id;'
+        '  document.getElementById("faq-q").value=btn.dataset.q;'
+        '  document.getElementById("faq-a").value=btn.dataset.a;'
+        '  document.getElementById("faq-cat").value=btn.dataset.cat;'
+        '  document.getElementById("faq-form-title").innerHTML="&#9998; Edit FAQ";'
+        '  document.getElementById("faq-q").scrollIntoView({behavior:"smooth",block:"center"});'
+        '}'
+        'function faqClear(){'
+        '  document.getElementById("faq-edit-id").value="";'
+        '  document.getElementById("faq-q").value="";'
+        '  document.getElementById("faq-a").value="";'
+        '  document.getElementById("faq-form-title").innerHTML="&#10133; Add New FAQ";'
+        '  document.getElementById("faq-msg").textContent="";'
+        '}'
+        'function faqSave(){'
+        '  var id=document.getElementById("faq-edit-id").value;'
+        '  var q=document.getElementById("faq-q").value.trim();'
+        '  var a=document.getElementById("faq-a").value.trim();'
+        '  var cat=document.getElementById("faq-cat").value;'
+        '  var msg=document.getElementById("faq-msg");'
+        '  if(!q||!a){msg.textContent="Question and answer are required.";msg.style.color="#991b1b";return;}'
+        '  var url=id?"/admin/faqs/"+id:"/admin/faqs";'
+        '  var method=id?"PUT":"POST";'
+        '  msg.textContent="Saving...";msg.style.color="#8B6914";'
+        '  fetch(url,{method:method,headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",'
+        '  body:"question="+encodeURIComponent(q)+"&answer="+encodeURIComponent(a)+"&category="+encodeURIComponent(cat)})'
+        '  .then(function(r){return r.text();}).then(function(html){'
+        '    if(id){var row=document.getElementById("faq-row-"+id);if(row)row.outerHTML=html;}'
+        '    else{document.getElementById("faq-tbody").insertAdjacentHTML("beforeend",html);}'
+        '    msg.textContent="\u2705 Saved!";msg.style.color="#166534";'
+        '    faqClear();setTimeout(function(){msg.textContent="";},3000);'
+        '  }).catch(function(e){msg.textContent="\u274c "+e.message;msg.style.color="#991b1b";});'
+        '}'
+        '</script>'
+    )
+
+
+@app.post("/admin/faqs", response_class=HTMLResponse)
+async def add_faq(request: Request, question: str = Form(...), answer: str = Form(...), category: str = Form("General")):
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    try:
+        sb = _get_supabase()
+        result = sb.table("faqs").insert({
+            "client_id": "tedpro_client",
+            "question":  question.strip(),
+            "answer":    answer.strip(),
+            "category":  category.strip() or "General",
+            "active":    True,
+        }).execute()
+        fid = result.data[0]["id"]
+        q   = question.strip().replace('"', "&quot;")
+        a   = answer.strip().replace('"', "&quot;")
+        cat = category.strip() or "General"
+        try:
+            get_engine()._save_to_cache(question.strip().lower(), answer.strip())
+        except Exception:
+            pass
+        return HTMLResponse(_faq_row_html(fid, question.strip(), answer.strip(), cat, True))
+    except Exception as e:
+        logger.error(f"Add FAQ error: {e}")
+        return HTMLResponse(f"Error: {e}", status_code=500)
+
+
+@app.put("/admin/faqs/{faq_id}", response_class=HTMLResponse)
+async def update_faq(request: Request, faq_id: str, question: str = Form(...), answer: str = Form(...), category: str = Form("General")):
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    try:
+        sb = _get_supabase()
+        sb.table("faqs").update({
+            "question": question.strip(),
+            "answer":   answer.strip(),
+            "category": category.strip() or "General",
+        }).eq("id", faq_id).execute()
+        try:
+            get_engine()._save_to_cache(question.strip().lower(), answer.strip())
+        except Exception:
+            pass
+        return HTMLResponse(_faq_row_html(faq_id, question.strip(), answer.strip(), category.strip() or "General", True))
+    except Exception as e:
+        logger.error(f"Update FAQ error: {e}")
+        return HTMLResponse(f"Error: {e}", status_code=500)
+
+
+@app.post("/admin/faqs/{faq_id}/toggle", response_class=HTMLResponse)
+async def toggle_faq(request: Request, faq_id: str):
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    try:
+        sb  = _get_supabase()
+        cur = sb.table("faqs").select("*").eq("id", faq_id).single().execute().data
+        if not cur:
+            return HTMLResponse("Not found", status_code=404)
+        new_active = not cur["active"]
+        sb.table("faqs").update({"active": new_active}).eq("id", faq_id).execute()
+        return HTMLResponse(_faq_row_html(faq_id, cur["question"], cur["answer"], cur.get("category","General") or "General", new_active))
+    except Exception as e:
+        logger.error(f"Toggle FAQ error: {e}")
+        return HTMLResponse(f"Error: {e}", status_code=500)
+
+
+@app.delete("/admin/faqs/{faq_id}", response_class=HTMLResponse)
+async def delete_faq(request: Request, faq_id: str):
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    try:
+        _get_supabase().table("faqs").delete().eq("id", faq_id).execute()
+        return HTMLResponse("")
+    except Exception as e:
+        logger.error(f"Delete FAQ error: {e}")
+        return HTMLResponse(f"Error: {e}", status_code=500)
+
+
+def _faq_row_html(fid: str, question: str, answer: str, cat: str, active: bool) -> str:
+    q = question.replace('"', "&quot;")
+    a = answer.replace('"', "&quot;")
+    badge = ('<span style="background:#DCFCE7;color:#166534;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:600">Active</span>'
+             if active else
+             '<span style="background:#FEE2E2;color:#991b1b;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:600">Inactive</span>')
+    tlabel = "Deactivate" if active else "Activate"
+    return (
+        f'<tr id="faq-row-{fid}" class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
+        f'<td class="px-4 py-3 text-xs text-[#8B6914] font-medium whitespace-nowrap">{cat}</td>'
+        f'<td class="px-4 py-3 text-sm text-[#2D1B00] font-medium">{question}</td>'
+        f'<td class="px-4 py-3 text-sm text-[#5A3A1B]"><div style="max-height:60px;overflow:hidden">{answer}</div></td>'
+        f'<td class="px-4 py-3">{badge}</td>'
+        f'<td class="px-4 py-3"><div style="display:flex;gap:6px;flex-wrap:wrap">'
+        f'<button onclick="faqEdit(this)" data-id="{fid}" data-q="{q}" data-a="{a}" data-cat="{cat}" '
+        f'style="padding:4px 10px;border-radius:6px;background:#FFF0DB;color:#FF922B;border:none;font-size:11px;font-weight:600;cursor:pointer">Edit</button>'
+        f'<button hx-post="/admin/faqs/{fid}/toggle" hx-target="#faq-row-{fid}" hx-swap="outerHTML" '
+        f'style="padding:4px 10px;border-radius:6px;background:#F3F4F6;color:#5A3A1B;border:none;font-size:11px;font-weight:600;cursor:pointer">{tlabel}</button>'
+        f'<button hx-delete="/admin/faqs/{fid}" hx-target="#faq-row-{fid}" hx-swap="outerHTML" hx-confirm="Delete this FAQ?" '
+        f'style="padding:4px 10px;border-radius:6px;background:#FEE2E2;color:#991b1b;border:none;font-size:11px;font-weight:600;cursor:pointer">Delete</button>'
+        f'</div></td></tr>'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Chat page — GET /
 # ---------------------------------------------------------------------------
@@ -1212,6 +1431,7 @@ async def _admin_dashboard(request: Request):
         leads_count    = len(sb.table("leads").select("id", count="exact").execute().data)
         conv_count     = len(sb.table("conversations").select("id", count="exact").execute().data)
         products_count = len(sb.table("products").select("id", count="exact").execute().data)
+        faqs_count     = len(sb.table("faqs").select("id").eq("client_id", "tedpro_client").execute().data or [])
         today          = datetime.now().date().isoformat()
         today_leads    = len(sb.table("leads").select("id").gte("timestamp", today).execute().data)
 
@@ -1272,19 +1492,6 @@ async def _admin_dashboard(request: Request):
         )
 
         # ── Tab panels ──────────────────────────────────────────────────────
-        faq_card = (
-            '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
-            '<div class="px-4 py-3 border-b border-[#FFE4CC]">'
-            '<h2 class="font-bold text-[#2D1B00] text-sm">&#129504; Teddy\'s FAQ Brain</h2></div>'
-            '<div class="p-4">'
-            '<p class="text-sm text-[#5A3A1B] mb-3">Load <strong>27 pre-written FAQs</strong> covering shipping, returns, payment, safety and gifting so Teddy answers accurately.</p>'
-            '<button hx-post="/admin/load-faqs" hx-target="#faq-result" hx-swap="innerHTML"'
-            ' style="padding:9px 20px;border-radius:8px;background:#FF922B;color:white;border:none;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">'
-            '&#129504; Load FAQs into Teddy</button>'
-            '<div id="faq-result" style="margin-top:12px"></div>'
-            '</div></div>'
-        )
-
         leads_panel = (
             '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
             '<div class="px-4 py-3 border-b border-[#FFE4CC]">'
@@ -1318,7 +1525,7 @@ async def _admin_dashboard(request: Request):
         tab_js = (
             '<script>'
             'function switchTab(t){'
-            '  ["leads","products","conversations"].forEach(function(id){'
+            '  ["leads","products","faqs","conversations"].forEach(function(id){'
             '    document.getElementById("panel-"+id).style.display = id===t?"block":"none";'
             '    var btn = document.getElementById("tab-"+id);'
             '    if(id===t){'
@@ -1346,7 +1553,7 @@ async def _admin_dashboard(request: Request):
 
             # Tab cards — clickable metric cards, Conversations last on right
             # Tab cards
-            + '<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">'
+            + '<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">'
             + '<button id="tab-leads" onclick="switchTab(\'leads\')" style="background:#FF922B;color:white;border:2px solid #FF922B;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;transform:translateY(-2px);box-shadow:0 4px 12px rgba(255,146,43,0.3);width:100%;font-family:inherit">'
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.85">Total Leads</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px">{leads_count}</p></button>'
@@ -1356,6 +1563,9 @@ async def _admin_dashboard(request: Request):
             + '<button id="tab-products" onclick="switchTab(\'products\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Products</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{products_count}</p></button>'
+            + '<button id="tab-faqs" onclick="switchTab(\'faqs\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
+            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">FAQs</p>'
+            + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{faqs_count}</p></button>'
             + '<button id="tab-conversations" onclick="switchTab(\'conversations\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Conversations</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{conv_count}</p></button>'
@@ -1364,8 +1574,9 @@ async def _admin_dashboard(request: Request):
 
             # Panels sit OUTSIDE the grid — full width
             + '<div style="margin-top:1.5rem">'
-            + '<div id="panel-leads" style="display:block">' + faq_card + leads_panel + '</div>'
+            + '<div id="panel-leads" style="display:block">' + leads_panel + '</div>'
             + '<div id="panel-products" style="display:none">' + products_panel + '</div>'
+            + '<div id="panel-faqs" style="display:none">' + _build_faq_panel() + '</div>'
             + '<div id="panel-conversations" style="display:none">' + convs_panel + '</div>'
             + '</div>'
 
