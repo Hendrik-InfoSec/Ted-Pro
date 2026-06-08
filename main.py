@@ -59,19 +59,42 @@ LOCAL_OFFSET_HOURS = 2
 def get_teddy_time():
     return (datetime.now() + timedelta(hours=LOCAL_OFFSET_HOURS)).strftime("%H:%M")
 
+SHOP_URL = "https://cuddleheros.co.za"
+
+BUY_KEYWORDS = [
+    "how do i order", "how to order", "want to buy", "want to order",
+    "how to buy", "where can i buy", "where do i buy", "place an order",
+    "how do i get", "i want one", "i want that", "i want the",
+    "can i get", "can i order", "ready to order", "how do i purchase",
+    "purchase", "checkout", "buy now", "order now", "i'll take",
+]
+
 def apply_teddy_vibes(text: str) -> str:
     closers = [
-        "Paws and hugs, Teddy \U0001f9f8",
-        "Stay cozy! \U0001f36f",
-        "Waiting for your next question! \u2728",
-        "Teddy out! \U0001f43e"
+        "Paws and hugs, Teddy 🧸",
+        "Stay cozy! 🍯",
+        "Waiting for your next question! ✨",
+        "Teddy out! 🐾"
     ]
     already_has_closer = any(c in text for c in closers)
     if already_has_closer:
         return text
     if "price" in text.lower() or "cost" in text.lower():
-        text = "I\'ve sniffed out the best value for you! " + text
+        text = "I've sniffed out the best value for you! " + text
     return f"{text}\n\n*{closers[int(time.time()) % len(closers)]}*"
+
+def maybe_add_shop_cta(query: str, response: str) -> str:
+    """Append a shop CTA if the customer is showing buying intent."""
+    q = query.lower()
+    if any(kw in q for kw in BUY_KEYWORDS):
+        cta = (
+            "\n\n---\n"
+            "\U0001f6d2 **Ready to grab yours?** Head over to "
+            f"[cuddleheros.co.za]({SHOP_URL}) to place your order \u2014 "
+            "use code **TEDDY10** for 10% off your first order! \U0001f9f8"
+        )
+        return response + cta
+    return response
 
 def send_welcome_email(name: str, email: str) -> bool:
     try:
@@ -212,6 +235,54 @@ def lookup_stock(query: str) -> str | None:
         return None
 
 # ---------------------------------------------------------------------------
+# FAQ lookup — checks faqs table directly, single source of truth
+# qa_cache is bypassed for FAQ answers, faqs table owns them
+# ---------------------------------------------------------------------------
+def lookup_faq(query: str) -> str | None:
+    """
+    Check the faqs table for an answer before hitting the AI.
+    Only returns active FAQs. Fuzzy-matches on question text.
+    Returns the answer string or None if no match.
+    """
+    try:
+        sb = _get_supabase()
+        faqs = sb.table("faqs").select("question, answer").eq("client_id", "tedpro_client").eq("active", True).execute().data or []
+        if not faqs:
+            return None
+
+        q = query.lower().strip()
+
+        # Exact or near-exact match first
+        for faq in faqs:
+            fq = faq["question"].lower().strip()
+            if fq == q or fq in q or q in fq:
+                logger.info(f"FAQ hit: '{faq['question']}'")
+                return faq["answer"]
+
+        # Word overlap match — if 60%+ of meaningful words match
+        q_words = set(w for w in q.split() if len(w) > 3)
+        if q_words:
+            best_score = 0
+            best_answer = None
+            for faq in faqs:
+                fq_words = set(w for w in faq["question"].lower().split() if len(w) > 3)
+                if not fq_words:
+                    continue
+                overlap = len(q_words & fq_words) / max(len(q_words), len(fq_words))
+                if overlap > best_score:
+                    best_score = overlap
+                    best_answer = faq["answer"]
+            if best_score >= 0.6 and best_answer:
+                logger.info(f"FAQ fuzzy hit (score={best_score:.2f})")
+                return best_answer
+
+        return None
+    except Exception as e:
+        logger.error(f"lookup_faq error: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # HTML helpers
 # ---------------------------------------------------------------------------
 # Admin JS lives outside BASE_HTML so it is NOT processed by .format()
@@ -323,7 +394,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         t = (datetime.now() + timedelta(hours=LOCAL_OFFSET_HOURS)).strftime("%H:%M")
         return HTMLResponse(
             content=bot_bubble(
-                "You've been chatting a lot! \U0001f4a4 Teddy can only handle 20 messages per hour to keep things fair. "
+                "You've been chatting a lot! \U0001f4a4 Teddy can only handle 40 messages per hour to keep things fair. "
                 "Take a short break and come back soon! \U0001f9f8",
                 t
             ),
@@ -332,7 +403,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return HTMLResponse(
         content=error_page(429,
             "Teddy needs a breather \U0001f4a4",
-            "You've sent a lot of messages! Teddy is limited to 20 messages per hour. Come back soon!"
+            "You've sent a lot of messages! Teddy is limited to 40 messages per hour. Come back soon!"
         ),
         status_code=429
     )
@@ -854,10 +925,6 @@ async def add_faq(request: Request, question: str = Form(...), answer: str = For
         q   = question.strip().replace('"', "&quot;")
         a   = answer.strip().replace('"', "&quot;")
         cat = category.strip() or "General"
-        try:
-            get_engine()._save_to_cache(question.strip().lower(), answer.strip())
-        except Exception:
-            pass
         return HTMLResponse(_faq_row_html(fid, question.strip(), answer.strip(), cat, True))
     except Exception as e:
         logger.error(f"Add FAQ error: {e}")
@@ -1109,7 +1176,7 @@ async def chat_post(request: Request, prompt: str = Form(...)):
 # Background response — polled every 1.5s
 # ---------------------------------------------------------------------------
 @app.get("/chat/response", response_class=HTMLResponse)
-@limiter.limit("20/hour")
+@limiter.limit("40/hour")
 async def chat_response(request: Request):
     init_session(request)
     session_id = request.session["session_id"]
@@ -1141,7 +1208,19 @@ async def chat_response(request: Request):
         q_lower = query.lower()
         enhanced_query = query
 
-        # Stock direct lookup — runs first for specific stock questions
+        # ── 1. FAQ lookup — check faqs table first, no AI needed ──────────
+        faq_answer = lookup_faq(query)
+        if faq_answer:
+            final  = apply_teddy_vibes(faq_answer)
+            t      = get_teddy_time()
+            save_history_row(session_id, query, final)
+            store["response"]   = final
+            store["time"]       = t
+            store["ready"]      = True
+            store["processing"] = False
+            return HTMLResponse(content=bot_bubble(final, t))
+
+        # ── 2. Stock direct lookup ────────────────────────────────────────
         is_stock_query = any(kw in q_lower for kw in STOCK_KEYWORDS)
         if is_stock_query:
             stock_info = lookup_stock(query)
@@ -1152,7 +1231,7 @@ async def chat_response(request: Request):
                     + stock_info
                 )
 
-        # Product context — broader keyword match for general product queries
+        # ── 3. Product context for general product queries ────────────────
         elif any(kw in q_lower for kw in PRODUCT_KEYWORDS):
             try:
                 products = get_engine().search_products(query, max_results=5)
@@ -1161,14 +1240,16 @@ async def chat_response(request: Request):
                         query
                         + "\n\n[PRODUCT INFO]\n"
                         + get_engine().format_product_response(products)
+                        + f"\n\n[SHOP LINK] If the customer wants to order, direct them to: {SHOP_URL}"
                     )
             except Exception:
-                pass  # fall through to plain query if engine search fails
+                pass
 
         history_for_context = load_history(session_id)
         history_for_context.append({"role": "user", "content": query})
 
         full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
+        full_response = maybe_add_shop_cta(query, full_response)
         final = apply_teddy_vibes(full_response)
         t     = get_teddy_time()
 
@@ -1631,7 +1712,7 @@ async def _dev_dashboard(request: Request):
     )
     try:
         sb = _get_supabase()
-        sb.table("qa_cache").select("id").limit(1).execute()
+        sb.table("faqs").select("id").limit(1).execute()
         db_status = '<span class="text-green-600 font-semibold">\u2705 Connected</span>'
     except Exception as e:
         db_status = f'<span class="text-red-500">\u274c {e}</span>'
