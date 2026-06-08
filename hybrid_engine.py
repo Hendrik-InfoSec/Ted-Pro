@@ -27,7 +27,7 @@ class HybridEngine:
 
     def _init_tables(self):
         try:
-            self.supabase.table('qa_cache').select("id").limit(1).execute()
+            self.supabase.table('faqs').select("id").limit(1).execute()
             self.logger.info("Database tables verified")
         except Exception as e:
             self.logger.warning(f"Table verification failed: {e}")
@@ -86,18 +86,16 @@ class HybridEngine:
             self.logger.error(f"Cache save error: {e}")
 
     def save_conversation(self, session_id: str, user_message: str, bot_response: str):
-        """Save a single Q&A pair for analytics."""
         try:
             self.supabase.table('conversations').insert({
                 'session_id': session_id,
                 'user_message': user_message,
-                'bot_response': bot_response[:1000],   # trim very long replies
+                'bot_response': bot_response[:1000],
                 'created_at': datetime.now().isoformat(),
                 'client_id': self.client_id
             }).execute()
             self.logger.info(f"Conversation saved for session {session_id[:8]}")
         except Exception as e:
-            # Non-critical — log and continue, never crash the chat
             self.logger.error(f"Conversation save error: {e}")
 
     def add_lead(self, name: str, email: str, context: str = "chat") -> bool:
@@ -144,16 +142,16 @@ class HybridEngine:
             return "No matching products in stock right now."
         response = "Here are some options:\n\n"
         for i, p in enumerate(products, 1):
-            price   = f"{p.get('currency','ZAR')} {p.get('price',0):.2f}"
-            name    = p.get('name', 'Unknown')
-            desc    = p.get('description', '')[:100]
+            price    = f"{p.get('currency','ZAR')} {p.get('price',0):.2f}"
+            name     = p.get('name', 'Unknown')
+            desc     = p.get('description', '')[:120]
             material = p.get('material', '')
-            size    = f"{p.get('size_cm',0)}cm" if p.get('size_cm') else ''
-            custom  = "\u2728 Customisable" if p.get('customisable') else ''
+            size     = f"{p.get('size_cm',0)}cm" if p.get('size_cm') else ''
+            custom   = "\u2728 Customisable" if p.get('customisable') else ''
             response += f"**{i}. {name}** — {price}\n"
-            if desc:     response += f"   {desc}\n"
+            if desc:             response += f"   {desc}\n"
             if material or size: response += f"   *{material} {size}*\n"
-            if custom:   response += f"   {custom}\n"
+            if custom:           response += f"   {custom}\n"
             response += "\n"
         return response
 
@@ -170,7 +168,7 @@ class HybridEngine:
     def stream_answer(self, question: str, chat_history: list = None) -> Generator[str, None, None]:
         self.logger.info(f"Processing question: '{question[:60]}'")
 
-        # Skip cache for short or conversational messages — their reply depends on context
+        # Skip cache for conversational messages — context-dependent
         skip_cache = len(question.strip()) < 20 or chat_history
         cached = None if skip_cache else self.search_local_cache(question)
         if cached:
@@ -180,26 +178,35 @@ class HybridEngine:
             return
 
         try:
-            # ----------------------------------------------------------------
-            # Teddy's personality + soft topic guardrail
-            # ----------------------------------------------------------------
             system_prompt = (
-                "You are Teddy, a warm, playful, and knowledgeable marketing assistant for CuddleHeros — "
-                "a premium plushie brand. Your personality is friendly, enthusiastic, and a little cuddly. "
-                "You use occasional emojis and keep responses concise but helpful.\n\n"
+                "You are Teddy, the official sales assistant for CuddleHeros — "
+                "a premium South African plushie brand. "
+                "You are warm, playful, enthusiastic, and a little cuddly in personality. "
+                "You use occasional emojis and keep responses concise, friendly, and helpful.\n\n"
 
-                "Your main topics: CuddleHeros plushie products, pricing, shipping, custom orders, "
-                "materials, safety, gifting ideas, and growing a plushie business.\n\n"
+                # Critical — correct URL hardcoded
+                "IMPORTANT: The CuddleHeros shop is at https://cuddleheros.co.za — "
+                "always use this exact URL. Never use cuddleheros.com or any other URL.\n\n"
 
-                "If someone asks something off-topic (unrelated to plushies, CuddleHeros, or gifting), "
-                "respond warmly and briefly, then gently steer back. For example: "
-                "'Ha, great question! I'm mostly a plushie expert, but here's what I know... "
-                "Speaking of which, can I help you find the perfect plushie? \U0001f9f8' "
-                "Never refuse rudely or say 'I can only talk about plushies.' Just redirect naturally.\n\n"
+                "Your role is to help customers:\n"
+                "- Discover and fall in love with CuddleHeros plushies\n"
+                "- Answer questions about products, pricing, shipping, custom orders, safety, and gifting\n"
+                "- Guide them naturally toward making a purchase at https://cuddleheros.co.za\n"
+                "- Capture their interest and make them feel excited about the brand\n\n"
 
-                "Important: Only greet the user once at the very start. "
-                "Do not repeat 'Hi', 'Hey there', or similar greetings after the first message. "
-                "Continue conversations naturally."
+                "Sales approach:\n"
+                "- When a customer shows interest in a product, highlight what makes it special\n"
+                "- Mention the TEDDY10 voucher code (10% off first order) when relevant\n"
+                "- When someone is ready to buy, guide them to https://cuddleheros.co.za\n"
+                "- Create gentle urgency when stock is low — never be pushy\n"
+                "- For custom orders, express genuine excitement and ask what they have in mind\n\n"
+
+                "Tone rules:\n"
+                "- Only greet the customer once at the very start — never repeat Hi/Hey after that\n"
+                "- Never say 'I can only talk about plushies' — just redirect naturally and warmly\n"
+                "- If asked something off-topic, answer briefly then steer back to CuddleHeros\n"
+                "- Keep responses under 150 words unless detail is genuinely needed\n"
+                "- Never make up product details — only reference what you are given in context\n"
             )
 
             full_answer = ""
@@ -220,14 +227,13 @@ class HybridEngine:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        # Inject conversation history so Teddy remembers the full chat
+
         for turn in (chat_history or []):
             role = turn.get("role")
             text = turn.get("content", "")
             if role in ("user", "assistant") and text:
                 messages.append({"role": role, "content": text})
-        # Current question is already the last user message in history,
-        # so only append separately if history is empty
+
         if not chat_history:
             messages.append({"role": "user", "content": question})
 
