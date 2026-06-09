@@ -59,7 +59,18 @@ LOCAL_OFFSET_HOURS = 2
 def get_teddy_time():
     return (datetime.now() + timedelta(hours=LOCAL_OFFSET_HOURS)).strftime("%H:%M")
 
-SHOP_URL = "https://cuddleheros.co.za"
+SHOP_URL      = "https://cuddleheros.co.za"
+WHATSAPP_URL  = "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%20some%20help%20with%20an%20order%20%F0%9F%A7%B8"
+
+# Triggers that suggest customer needs human help
+HANDOFF_KEYWORDS = [
+    "speak to someone", "talk to someone", "real person", "human",
+    "speak to a person", "contact you", "call you", "whatsapp",
+    "not sure", "complicated", "complex", "confused",
+    "custom order", "bulk order", "corporate", "wedding", "event",
+    "complaint", "problem", "wrong", "damaged", "broken",
+    "refund", "return", "exchange", "urgent",
+]
 
 BUY_KEYWORDS = [
     "how do i order", "how to order", "want to buy", "want to order",
@@ -118,7 +129,7 @@ def send_welcome_email(name: str, email: str) -> bool:
 <h2 style="color:#FF922B;font-size:36px;">TEDDY10</h2>
 <p style="color:#8B6914;">10% OFF your first order \u2022 Valid 30 days</p>
 </div>
-<a href="https://cuddleheros.com/shop" style="display:inline-block;background:#FF922B;color:white;padding:16px 40px;border-radius:30px;text-decoration:none;font-weight:600;">Shop the Catalog</a>
+<a href="https://cuddleheros.co.za" style="display:inline-block;background:#FF922B;color:white;padding:16px 40px;border-radius:30px;text-decoration:none;font-weight:600;">Shop the Catalog</a>
 <p style="margin-top:30px;color:#8B6914;">Paws and hugs,<br><strong>Teddy \U0001f9f8</strong></p>
 </div></body></html>"""
         msg.attach(MIMEText(html, "html"))
@@ -443,6 +454,24 @@ def bot_bubble(text: str, t: str) -> str:
         f'}})();'
         f'</script>'
     )
+
+def handoff_bubble() -> str:
+    """A WhatsApp CTA bubble injected when human handoff is needed."""
+    return (
+        '<div class="flex justify-start fade-in mb-3">'
+        '<div class="flex items-end gap-2 max-w-[85%] md:max-w-[70%]">'
+        '<div class="w-8 h-8 rounded-full bg-[#FFE4CC] flex items-center justify-center text-sm flex-shrink-0">\U0001f9f8</div>'
+        '<div class="bg-white border border-[#FFE4CC] px-4 py-3 rounded-2xl rounded-bl-md shadow-md">'
+        '<p class="text-sm text-[#2D1B00] mb-3">For this one I\'d love to connect you directly with our team '
+        '\U0001f917 They can sort you out properly!</p>'
+        '<a href="https://wa.me/27836205614" target="_blank" '
+        'class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm text-white shadow-md" '
+        'style="background:#25D366">'
+        '&#128172; Chat with us on WhatsApp</a>'
+        '<p class="text-xs text-[#8B6914] mt-2">Mon\u2013Fri 8am\u20135pm \u2022 Sat 9am\u20131pm</p>'
+        '</div></div></div>'
+    )
+
 
 def thinking_bubble() -> str:
     return (
@@ -1014,7 +1043,18 @@ async def chat_page(request: Request):
     session_id    = request.session["session_id"]
     history       = load_history(session_id)
     lead_captured = request.session.get("lead_captured", False)
-    show_lead     = len(history) >= 2 and not lead_captured
+    # Lead capture — fire when customer has shown real intent:
+    # asked about price, product, ordering, or has 4+ exchanges
+    LEAD_INTENT_KEYWORDS = [
+        'price', 'cost', 'how much', 'order', 'buy', 'purchase',
+        'ship', 'deliver', 'custom', 'want', 'get one', 'get it',
+        'available', 'stock', 'gift', 'present', 'birthday',
+    ]
+    has_intent = any(
+        any(kw in m.get('content','').lower() for kw in LEAD_INTENT_KEYWORDS)
+        for m in history if m.get('role') == 'user'
+    )
+    show_lead = not lead_captured and (has_intent or len(history) >= 8)
 
     messages_html = "".join(
         user_bubble(m["content"], m.get("time", "")) if m["role"] == "user"
@@ -1038,7 +1078,13 @@ async def chat_page(request: Request):
             'class="w-full px-3 py-2 rounded-xl border border-[#FFD5A5] bg-white focus:outline-none focus:ring-2 focus:ring-[#FF922B] text-[#2D1B00] text-sm">'
             '<button type="submit" class="w-full py-2 rounded-xl bg-gradient-to-r from-[#FF922B] to-[#FF8C42] '
             'text-white font-bold shadow-md text-sm">\U0001f9f8 Claim My 10% Voucher</button>'
-            '</form></div>'
+            '</form>'
+            '<div class="mt-3 pt-3 border-t border-[#FFD5A5] text-center">'
+            '<p class="text-xs text-[#8B6914] mb-2">Prefer to chat directly?</p>'
+            '<a href="https://wa.me/27836205614" target="_blank" '
+            'class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white" '
+            'style="background:#25D366">&#128172; WhatsApp Us</a>'
+            '</div></div>'
         )
 
     quick_qs = [
@@ -1207,6 +1253,20 @@ async def chat_response(request: Request):
     try:
         q_lower = query.lower()
         enhanced_query = query
+
+        # ── 0. Handoff detection — human needed ─────────────────────────
+        if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
+            faq_ans = lookup_faq(query)  # still check FAQs first
+            if not faq_ans:              # no FAQ answer → hand off
+                t = get_teddy_time()
+                ai_resp = "".join(get_engine().stream_answer(query, chat_history=load_history(session_id)))
+                final   = apply_teddy_vibes(ai_resp)
+                save_history_row(session_id, query, final)
+                store["response"]   = final + "|||HANDOFF|||"
+                store["time"]       = t
+                store["ready"]      = True
+                store["processing"] = False
+                return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble())
 
         # ── 1. FAQ lookup — check faqs table first, no AI needed ──────────
         faq_answer = lookup_faq(query)
