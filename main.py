@@ -1702,6 +1702,17 @@ async def admin_page(request: Request):
         return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", "Admin Access", "/admin/login"), include_admin_js=True))
     return await _admin_dashboard(request)
 
+@app.post("/admin/reverify", response_class=HTMLResponse)
+async def admin_reverify(request: Request, password: str = Form(...)):
+    """Re-verification for sensitive actions."""
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    if password == ADMIN_PASSWORD:
+        request.session["admin_verified"] = True
+        return HTMLResponse("OK")
+    return HTMLResponse("Wrong password", status_code=403)
+
+
 @app.post("/admin/login", response_class=HTMLResponse)
 async def admin_login(request: Request, password: str = Form(...)):
     if password == ADMIN_PASSWORD:
