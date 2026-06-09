@@ -1920,7 +1920,7 @@ async def _admin_dashboard(request: Request):
             # Tab cards — clickable metric cards, Conversations last on right
             # Tab cards
             + '<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">'
-            + '<button id="tab-leads" onclick="switchTab(\'leads\')" style="background:#FF922B;color:white;border:2px solid #FF922B;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;transform:translateY(-2px);box-shadow:0 4px 12px rgba(255,146,43,0.3);width:100%;font-family:inherit">'
+            + '<button id="tab-leads" onclick="switchTab(\'leads\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;transform:translateY(-2px);box-shadow:0 4px 12px rgba(255,146,43,0.3);width:100%;font-family:inherit">'
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.85">Total Leads</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px">{leads_count}</p></button>'
             + '<button id="tab-today" onclick="switchTab(\'leads\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
@@ -1932,7 +1932,7 @@ async def _admin_dashboard(request: Request):
             + '<button id="tab-faqs" onclick="switchTab(\'faqs\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">FAQs</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{faqs_count}</p></button>'
-            + '<button id="tab-conversations" onclick="switchTab(\'conversations\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
+            + '<button id="tab-conversations" onclick="switchTab(\'conversations\')" style="background:#FF922B;color:white;border:2px solid #FF922B;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Conversations</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{conv_count}</p></button>'
 
@@ -1940,10 +1940,10 @@ async def _admin_dashboard(request: Request):
 
             # Panels sit OUTSIDE the grid — full width
             + '<div style="margin-top:1.5rem">'
-            + '<div id="panel-leads" style="display:block">' + leads_panel + '</div>'
+            + '<div id="panel-leads" style="display:none">' + leads_panel + '</div>'
             + '<div id="panel-products" style="display:none">' + products_panel + '</div>'
             + '<div id="panel-faqs" style="display:none">' + _build_faq_panel() + '</div>'
-            + '<div id="panel-conversations" style="display:none">' + convs_panel + '</div>'
+            + '<div id="panel-conversations" style="display:block">' + convs_panel + '</div>'
             + '</div>'
 
             + tab_js
