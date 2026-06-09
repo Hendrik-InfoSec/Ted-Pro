@@ -1802,11 +1802,12 @@ async def _admin_dashboard(request: Request):
             f'<td class="px-4 py-2 text-sm text-[#8B6914]">{str(l.get("timestamp",""))[:10]}</td></tr>'
             for l in leads_data
         )
+        def _esc(s): return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('"','&quot;')
         convs_rows = "".join(
             f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
-            f'<td class="px-4 py-3 text-xs font-mono text-[#8B6914]">{str(c.get("session_id",""))[:8]}</td>'
-            f'<td class="px-4 py-3 text-sm text-[#2D1B00]">{str(c.get("user_message",""))[:80]}</td>'
-            f'<td class="px-4 py-3 text-sm text-[#5A3A1B]">{str(c.get("bot_response",""))[:80]}...</td>'
+            f'<td class="px-4 py-3 text-xs font-mono text-[#8B6914]">{_esc(str(c.get("session_id",""))[:8])}</td>'
+            f'<td class="px-4 py-3 text-sm text-[#2D1B00]">{_esc(str(c.get("user_message",""))[:80])}</td>'
+            f'<td class="px-4 py-3 text-sm text-[#5A3A1B]">{_esc(str(c.get("bot_response",""))[:80])}...</td>'
             f'<td class="px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap">{str(c.get("created_at",""))[:10]}</td></tr>'
             for c in convs_data
         )
