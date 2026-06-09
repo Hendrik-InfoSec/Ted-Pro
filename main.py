@@ -197,6 +197,11 @@ def _safe_password(env_key: str) -> str:
 ADMIN_PASSWORD = _safe_password("ADMIN_PASSWORD")
 DEV_PASSWORD   = _safe_password("DEV_PASSWORD")
 
+def _esc_html(s) -> str:
+    """Escape HTML special chars so content can't break the page structure."""
+    return (str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+            .replace('"','&quot;'))
+
 def _admin_verified(request: Request) -> bool:
     """Returns True if admin has re-verified password for this sensitive action."""
     return bool(request.session.get("admin_verified"))
@@ -850,8 +855,8 @@ def _build_faq_panel() -> str:
         return (
             f'<tr id="faq-row-{fid}" class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
             f'<td class="px-4 py-3 text-xs text-[#8B6914] font-medium whitespace-nowrap">{cat}</td>'
-            f'<td class="px-4 py-3 text-sm text-[#2D1B00] font-medium">{f.get("question","")}</td>'
-            f'<td class="px-4 py-3 text-sm text-[#5A3A1B]"><div style="max-height:60px;overflow:hidden">{f.get("answer","")}</div></td>'
+            f'<td class="px-4 py-3 text-sm text-[#2D1B00] font-medium">{_esc_html(f.get("question",""))}</td>'
+            f'<td class="px-4 py-3 text-sm text-[#5A3A1B]"><div style="max-height:60px;overflow:hidden">{_esc_html(f.get("answer",""))}</div></td>'
             f'<td class="px-4 py-3">{badge}</td>'
             f'<td class="px-4 py-3"><div style="display:flex;gap:6px;flex-wrap:wrap">'
             f'<button onclick="faqEdit(this)" data-id="{fid}" data-q="{q}" data-a="{a}" data-cat="{cat}" '
@@ -1174,8 +1179,8 @@ def _faq_row_html(fid: str, question: str, answer: str, cat: str, active: bool) 
     return (
         f'<tr id="faq-row-{fid}" class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
         f'<td class="px-4 py-3 text-xs text-[#8B6914] font-medium whitespace-nowrap">{cat}</td>'
-        f'<td class="px-4 py-3 text-sm text-[#2D1B00] font-medium">{question}</td>'
-        f'<td class="px-4 py-3 text-sm text-[#5A3A1B]"><div style="max-height:60px;overflow:hidden">{answer}</div></td>'
+        f'<td class="px-4 py-3 text-sm text-[#2D1B00] font-medium">{_esc_html(question)}</td>'
+        f'<td class="px-4 py-3 text-sm text-[#5A3A1B]"><div style="max-height:60px;overflow:hidden">{_esc_html(answer)}</div></td>'
         f'<td class="px-4 py-3">{badge}</td>'
         f'<td class="px-4 py-3"><div style="display:flex;gap:6px;flex-wrap:wrap">'
         f'<button onclick="faqEdit(this)" data-id="{fid}" data-q="{q}" data-a="{a}" data-cat="{cat}" '
@@ -1707,6 +1712,35 @@ async def admin_page(request: Request):
         return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", "Admin Access", "/admin/login"), include_admin_js=True))
     return await _admin_dashboard(request)
 
+@app.get("/admin/conversations/rows", response_class=HTMLResponse)
+async def conversations_rows(request: Request):
+    """Return just the conversation table rows — loaded async so content can't break the page."""
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    try:
+        sb = _get_supabase()
+        convs = sb.table("conversations").select("*").eq("client_id", "tedpro_client").order("created_at", desc=True).limit(50).execute().data or []
+        if not convs:
+            return HTMLResponse('<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">No conversations yet</td></tr>')
+        parts = []
+        for c in convs:
+            sid  = str(c.get('session_id',''))[:8].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+            umsg = str(c.get('user_message',''))[:80].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+            bresp = str(c.get('bot_response',''))[:80].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+            cdate = str(c.get('created_at',''))[:10]
+            parts.append(
+                f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
+                f'<td class="px-4 py-3 text-xs font-mono text-[#8B6914]">{sid}</td>'
+                f'<td class="px-4 py-3 text-sm text-[#2D1B00]">{umsg}</td>'
+                f'<td class="px-4 py-3 text-sm text-[#5A3A1B]">{bresp}...</td>'
+                f'<td class="px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap">{cdate}</td></tr>'
+            )
+        return HTMLResponse("".join(parts))
+    except Exception as e:
+        logger.error(f"conversations_rows error: {e}")
+        return HTMLResponse(f'<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-red-500">Error loading: {e}</td></tr>')
+
+
 @app.get("/admin/conversations/export")
 async def export_conversations(request: Request):
     """Download all conversations as CSV."""
@@ -1802,20 +1836,7 @@ async def _admin_dashboard(request: Request):
             f'<td class="px-4 py-2 text-sm text-[#8B6914]">{str(l.get("timestamp",""))[:10]}</td></tr>'
             for l in leads_data
         )
-        convs_rows_parts = []
-        for c in convs_data:
-            sid  = str(c.get('session_id',''))[:8].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-            umsg = str(c.get('user_message',''))[:80].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-            bresp = str(c.get('bot_response',''))[:80].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-            cdate = str(c.get('created_at',''))[:10]
-            convs_rows_parts.append(
-                f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
-                f'<td class="px-4 py-3 text-xs font-mono text-[#8B6914]">{sid}</td>'
-                f'<td class="px-4 py-3 text-sm text-[#2D1B00]">{umsg}</td>'
-                f'<td class="px-4 py-3 text-sm text-[#5A3A1B]">{bresp}...</td>'
-                f'<td class="px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap">{cdate}</td></tr>'
-            )
-        convs_rows = ''.join(convs_rows_parts)
+        # conversations now loaded async via /admin/conversations/rows
 
         # Product catalog — expandable rows with inline stock toggle
         product_catalog_rows = "".join(_render_product_row(p) for p in products_data)
@@ -1866,9 +1887,10 @@ async def _admin_dashboard(request: Request):
             '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Customer Message</th>'
             '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Teddy Response</th>'
             '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Date</th>'
-            '</tr></thead><tbody>'
-            + (convs_rows or '<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">No conversations yet</td></tr>')
-            + '</tbody></table></div></div>'
+            '</tr></thead>'
+            '<tbody hx-get="/admin/conversations/rows" hx-trigger="load" hx-swap="innerHTML">'
+            '<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">Loading conversations...</td></tr>'
+            '</tbody></table></div></div>'
         )
 
         # ── Tab card click JS (inline — tiny, no escaping issues) ───────────
@@ -1884,13 +1906,19 @@ async def _admin_dashboard(request: Request):
             '    else{b.style.background="white";b.style.color="#5A3A1B";b.style.borderColor="#FFE4CC";b.style.transform="none";b.style.boxShadow="0 1px 3px rgba(0,0,0,0.05)";}'
             '  });'
             '}'
-            'document.addEventListener("DOMContentLoaded",function(){'
-            '  var tabs=["leads","products","faqs","conversations"];'
-            '  tabs.forEach(function(id){'
-            '    var b=document.getElementById("tab-"+id);'
-            '    if(b)b.addEventListener("click",function(){switchTab(id);});'
-            '  });'
-            '});'
+            '(function(){'  
+            '  function bindTabs(){'  
+            '    ["leads","products","faqs","conversations"].forEach(function(id){'
+            '      var b=document.getElementById("tab-"+id);'
+            '      if(b)b.onclick=function(){switchTab(id);};'
+            '    });'
+            '  }'
+            '  if(document.readyState==="loading"){'
+            '    document.addEventListener("DOMContentLoaded",bindTabs);'
+            '  } else {'
+            '    bindTabs();'
+            '  }'
+            '})();'
             '</script>'
         )
 
