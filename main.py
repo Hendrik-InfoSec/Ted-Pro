@@ -933,8 +933,132 @@ def _build_faq_panel() -> str:
         '    faqClear();setTimeout(function(){msg.textContent="";},3000);'
         '  }).catch(function(e){msg.textContent="\u274c "+e.message;msg.style.color="#991b1b";});'
         '}'
+        # Re-verify modal + bulk upload JS
+        'var _pendingAction=null;'
+        'function showVerifyModal(msg,onOk){'
+        '  _pendingAction=onOk;'
+        '  var d=document.createElement("div");d.id="reverify-modal";'
+        '  d.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999";'
+        '  d.innerHTML="<div style=\'background:white;border-radius:16px;padding:28px;max-width:360px;width:90%;text-align:center\'>"'
+        '    +"<div style=\'font-size:36px;margin-bottom:8px\'>&#128274;</div>"'
+        '    +"<h2 style=\'font-size:16px;font-weight:700;color:#2D1B00;margin-bottom:6px\'>Confirm your identity</h2>"'
+        '    +"<p style=\'font-size:13px;color:#5A3A1B;margin-bottom:16px\'>"+msg+"</p>"'
+        '    +"<input id=\'verify-pw\' type=\'password\' placeholder=\'Enter admin password\' style=\'width:100%;padding:10px 12px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;box-sizing:border-box;margin-bottom:8px;font-family:inherit\'>"'
+        '    +"<div id=\'verify-err\' style=\'font-size:12px;color:#991b1b;margin-bottom:10px;min-height:16px\'></div>"'
+        '    +"<div style=\'display:flex;gap:8px;justify-content:center\'>"'
+        '    +"<button onclick=\'doVerify()\' style=\'padding:9px 20px;border-radius:8px;background:#FF922B;color:white;border:none;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit\'>Confirm</button>"'
+        '    +"<button onclick=\'document.getElementById(\\"reverify-modal\\").remove()\' style=\'padding:9px 16px;border-radius:8px;background:white;color:#2D1B00;border:0.5px solid #FFD5A5;font-size:13px;cursor:pointer;font-family:inherit\'>Cancel</button>"'
+        '    +"</div></div>";'
+        '  document.body.appendChild(d);'
+        '  setTimeout(function(){var i=document.getElementById("verify-pw");if(i){i.focus();i.onkeydown=function(e){if(e.key==="Enter")doVerify();};}},100);'
+        '}'
+        'function doVerify(){'
+        '  var pw=document.getElementById("verify-pw").value;'
+        '  fetch("/admin/reverify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"password="+encodeURIComponent(pw)})'
+        '  .then(function(r){'
+        '    if(r.ok){document.getElementById("reverify-modal").remove();if(_pendingAction)_pendingAction();}'
+        '    else{var e=document.getElementById("verify-err");if(e)e.textContent="Incorrect password. Try again.";}'
+        '  });'
+        '}'
+        'var _origFaqSave=faqSave;'
+        'faqSave=function(){'
+        '  var id=document.getElementById("faq-edit-id").value;'
+        '  var lbl=id?"Confirm password to update this FAQ.":"Confirm password to add this FAQ.";'
+        '  showVerifyModal(lbl,_origFaqSave);'
+        '};'
+        'window.faqBulkDrop=function(e){e.preventDefault();var f=e.dataTransfer.files[0];if(f)faqBulkRead(f);};'
+        'window.faqBulkRead=function(f){'
+        '  if(!f.name.match(/\\.csv$/i)){alert("Please upload a .csv file.");return;}'
+        '  var r=new FileReader();'
+        '  r.onload=function(ev){'
+        '    document.getElementById("faq-bulk-title").textContent=f.name+" \u2014 ready";'
+        '    document.getElementById("faq-bulk-drop").style.background="#E6FFE6";'
+        '    showVerifyModal("Confirm password to upload "+f.name+".",function(){faqBulkSubmit(ev.target.result);});'
+        '  };'
+        '  r.readAsText(f);'
+        '};'
+        'function faqBulkSubmit(csv){'
+        '  var res=document.getElementById("faq-bulk-result");'
+        '  res.innerHTML="<p style=\'font-size:12px;color:#8B6914\'>Uploading...</p>";'
+        '  var fd=new FormData();fd.append("faq_file",csv);'
+        '  fetch("/admin/faqs/bulk-upload",{method:"POST",body:fd,credentials:"same-origin"})'
+        '  .then(function(r){return r.text();}).then(function(html){res.innerHTML=html;})'
+        '  .catch(function(e){res.innerHTML="<p style=\'color:#991b1b;font-size:12px\'>"+e.message+"</p>";});'
+        '}'
         '</script>'
     )
+
+
+@app.get("/admin/faqs/template")
+async def faq_csv_template(request: Request):
+    """Download a CSV template for bulk FAQ upload."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    from fastapi.responses import Response
+    csv_content = (
+        "category,question,answer\n"
+        "Shipping,How long does delivery take?,We deliver nationwide in 3-5 business days. Major cities 2-3 days!\n"
+        "Payment,What payment methods do you accept?,We accept EFT credit and debit cards SnapScan and PayFast. All payments secure.\n"
+        "Returns,What is your return policy?,Contact us within 48 hours of receiving a damaged item and we arrange a replacement or refund.\n"
+        "Safety,Are your plushies safe for kids?,Our plushies are made with non-toxic child-safe materials. Suitable from 12 months and up.\n"
+        "General,How do I place an order?,Visit cuddleheros.co.za to browse and order. Use code TEDDY10 for 10 percent off your first order!\n"
+    )
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=faqs_template.csv"}
+    )
+
+
+@app.post("/admin/faqs/bulk-upload", response_class=HTMLResponse)
+async def bulk_upload_faqs(request: Request, faq_file: str = Form(...)):
+    """Accept CSV text with category,question,answer and bulk insert FAQs."""
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("❌ Not authenticated.", status_code=401)
+    if not _admin_verified(request):
+        return HTMLResponse("❌ Password verification required.", status_code=403)
+    try:
+        import io, csv as csv_mod
+        sb = _get_supabase()
+        reader = csv_mod.DictReader(io.StringIO(faq_file.strip()))
+        rows   = list(reader)
+        if not rows:
+            return HTMLResponse("❌ CSV is empty or invalid.")
+        headers = {k.lower().strip() for k in rows[0].keys()}
+        if "question" not in headers or "answer" not in headers:
+            return HTMLResponse("❌ CSV must have at least: question, answer")
+        inserted = 0
+        skipped  = 0
+        for row in rows:
+            r   = {k.lower().strip(): v.strip() for k, v in row.items()}
+            q   = r.get("question", "").strip()
+            a   = r.get("answer",   "").strip()
+            cat = r.get("category", "General").strip() or "General"
+            if not q or not a:
+                skipped += 1
+                continue
+            existing = sb.table("faqs").select("id").eq("client_id", "tedpro_client").eq("question", q).execute().data
+            if existing:
+                skipped += 1
+                continue
+            sb.table("faqs").insert({
+                "client_id": "tedpro_client",
+                "question":  q,
+                "answer":    a,
+                "category":  cat,
+                "active":    True,
+            }).execute()
+            inserted += 1
+        request.session.pop("admin_verified", None)
+        skip_msg = f" ({skipped} skipped — duplicates or empty)" if skipped else ""
+        return HTMLResponse(
+            f'<div style="background:#F0FFF4;border:0.5px solid #86EFAC;border-radius:10px;padding:12px 16px;font-size:13px;color:#166534;font-weight:600">'
+            f'✅ {inserted} FAQs uploaded!{skip_msg} '
+            f'<a href="/admin" style="color:#FF922B;text-decoration:underline;margin-left:8px">Refresh to see them</a></div>'
+        )
+    except Exception as e:
+        logger.error(f"Bulk FAQ upload error: {e}")
+        return HTMLResponse(f"❌ Error: {e}")
 
 
 @app.post("/admin/faqs", response_class=HTMLResponse)
@@ -954,6 +1078,7 @@ async def add_faq(request: Request, question: str = Form(...), answer: str = For
         q   = question.strip().replace('"', "&quot;")
         a   = answer.strip().replace('"', "&quot;")
         cat = category.strip() or "General"
+        request.session.pop("admin_verified", None)
         return HTMLResponse(_faq_row_html(fid, question.strip(), answer.strip(), cat, True))
     except Exception as e:
         logger.error(f"Add FAQ error: {e}")
@@ -975,6 +1100,7 @@ async def update_faq(request: Request, faq_id: str, question: str = Form(...), a
             get_engine()._save_to_cache(question.strip().lower(), answer.strip())
         except Exception:
             pass
+        request.session.pop("admin_verified", None)
         return HTMLResponse(_faq_row_html(faq_id, question.strip(), answer.strip(), category.strip() or "General", True))
     except Exception as e:
         logger.error(f"Update FAQ error: {e}")
@@ -1004,6 +1130,7 @@ async def delete_faq(request: Request, faq_id: str):
         return HTMLResponse("Not authenticated", status_code=401)
     try:
         _get_supabase().table("faqs").delete().eq("id", faq_id).execute()
+        request.session.pop("admin_verified", None)
         return HTMLResponse("")
     except Exception as e:
         logger.error(f"Delete FAQ error: {e}")
@@ -1520,6 +1647,7 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
         if existing_ids:
             sb.table("products").delete().in_("id", existing_ids).execute()
 
+        request.session.pop("admin_verified", None)
         return HTMLResponse(f'\u2705 {len(products)} products uploaded successfully.')
     except Exception as e:
         logger.error(f"Product upload error: {e}")
