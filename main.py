@@ -1774,7 +1774,7 @@ async def _admin_dashboard(request: Request):
         today_leads    = len(sb.table("leads").select("id").gte("timestamp", today).execute().data)
 
         leads_data    = sb.table("leads").select("*").order("timestamp", desc=True).limit(50).execute().data or []
-        convs_data    = sb.table("conversations").select("*").order("created_at", desc=True).limit(20).execute().data or []
+        convs_data    = sb.table("conversations").select("*").eq("client_id", "tedpro_client").order("created_at", desc=True).limit(50).execute().data or []
         products_data = sb.table("products").select("*").order("name").execute().data or []
 
         def metric(label, value):
@@ -1803,9 +1803,11 @@ async def _admin_dashboard(request: Request):
             for l in leads_data
         )
         convs_rows = "".join(
-            f'<tr class="border-b border-[#FFE4CC]">'
-            f'<td class="px-4 py-2 text-sm text-[#2D1B00]">{str(c.get("user_message",""))[:70]}...</td>'
-            f'<td class="px-4 py-2 text-sm text-[#8B6914]">{str(c.get("created_at",""))[:10]}</td></tr>'
+            f'<tr class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
+            f'<td class="px-4 py-3 text-xs font-mono text-[#8B6914]">{str(c.get("session_id",""))[:8]}</td>'
+            f'<td class="px-4 py-3 text-sm text-[#2D1B00]">{str(c.get("user_message",""))[:80]}</td>'
+            f'<td class="px-4 py-3 text-sm text-[#5A3A1B]">{str(c.get("bot_response",""))[:80]}...</td>'
+            f'<td class="px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap">{str(c.get("created_at",""))[:10]}</td></tr>'
             for c in convs_data
         )
 
@@ -1854,10 +1856,12 @@ async def _admin_dashboard(request: Request):
             'class="text-xs text-[#FF922B] hover:underline font-semibold">&#128229; Export CSV</a></div>'
             '<div class="overflow-x-auto"><table class="w-full">'
             '<thead class="bg-[#FFF9F4]"><tr>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Message</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Session</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Customer Message</th>'
+            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Teddy Response</th>'
             '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Date</th>'
             '</tr></thead><tbody>'
-            + (convs_rows or '<tr><td colspan="2" class="px-4 py-4 text-sm text-center text-[#8B6914]">No conversations yet</td></tr>')
+            + (convs_rows or '<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">No conversations yet</td></tr>')
             + '</tbody></table></div></div>'
         )
 
