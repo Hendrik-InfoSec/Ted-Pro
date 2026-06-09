@@ -1864,7 +1864,7 @@ async def _admin_dashboard(request: Request):
             + '<button id="tab-leads" onclick="switchTab(\'leads\')" style="background:#FF922B;color:white;border:2px solid #FF922B;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;transform:translateY(-2px);box-shadow:0 4px 12px rgba(255,146,43,0.3);width:100%;font-family:inherit">'
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.85">Total Leads</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px">{leads_count}</p></button>'
-            + '<button id="tab-today" onclick="switchTab(\'today\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
+            + '<button id="tab-today" onclick="switchTab(\'leads\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
             + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Today</p>'
             + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{today_leads}</p></button>'
             + '<button id="tab-products" onclick="switchTab(\'products\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
