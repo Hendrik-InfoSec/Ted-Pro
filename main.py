@@ -197,6 +197,11 @@ def _safe_password(env_key: str) -> str:
 ADMIN_PASSWORD = _safe_password("ADMIN_PASSWORD")
 DEV_PASSWORD   = _safe_password("DEV_PASSWORD")
 
+def _admin_verified(request: Request) -> bool:
+    """Returns True if admin has re-verified password for this sensitive action."""
+    return bool(request.session.get("admin_verified"))
+
+
 # ---------------------------------------------------------------------------
 # Stock lookup — used by Teddy to answer "is X in stock?" reliably
 # ---------------------------------------------------------------------------
