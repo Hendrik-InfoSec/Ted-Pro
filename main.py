@@ -1262,7 +1262,7 @@ async def chat_page(request: Request):
   <div class="bg-gradient-to-r from-[#FF922B] to-[#FF8C42] text-white py-4 px-4 text-center shadow-md sticky top-0 z-10">
     <div class="text-3xl float-anim">\U0001f9f8</div>
     <h1 class="text-lg font-bold leading-tight">TedPro</h1>
-    <p class="text-xs opacity-90">Your Plushie Marketing Assistant</p>
+    <p class="text-xs opacity-90">Your CuddleHeros Assistant &#129528;</p>
   </div>
   <div class="flex-1 flex flex-col px-4 pt-4 pb-0 overflow-hidden">
     <div class="text-center mb-3">
@@ -1707,6 +1707,37 @@ async def admin_page(request: Request):
         return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", "Admin Access", "/admin/login"), include_admin_js=True))
     return await _admin_dashboard(request)
 
+@app.get("/admin/conversations/export")
+async def export_conversations(request: Request):
+    """Download all conversations as CSV."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    try:
+        import io, csv as csv_mod
+        from fastapi.responses import Response
+        sb = _get_supabase()
+        rows = sb.table("conversations").select("*").eq("client_id", "tedpro_client")             .order("created_at", desc=True).execute().data or []
+        output = io.StringIO()
+        writer = csv_mod.writer(output)
+        writer.writerow(["date", "session_id", "user_message", "bot_response"])
+        for r in rows:
+            writer.writerow([
+                str(r.get("created_at", ""))[:19],
+                str(r.get("session_id", ""))[:8],
+                r.get("user_message", ""),
+                r.get("bot_response", "")[:200],
+            ])
+        filename = f"conversations_{datetime.now().strftime('%Y%m%d')}.csv"
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logger.error(f"Export error: {e}")
+        return HTMLResponse(f"Export failed: {e}", status_code=500)
+
+
 @app.post("/admin/reverify", response_class=HTMLResponse)
 async def admin_reverify(request: Request, password: str = Form(...)):
     """Re-verification for sensitive actions."""
@@ -1817,8 +1848,10 @@ async def _admin_dashboard(request: Request):
 
         convs_panel = (
             '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
-            '<div class="px-4 py-3 border-b border-[#FFE4CC]">'
-            '<h2 class="font-bold text-[#2D1B00] text-sm">&#128172; Recent Conversations</h2></div>'
+            '<div class="px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center">'
+            '<h2 class="font-bold text-[#2D1B00] text-sm">&#128172; Recent Conversations</h2>'
+            '<a href="/admin/conversations/export" '
+            'class="text-xs text-[#FF922B] hover:underline font-semibold">&#128229; Export CSV</a></div>'
             '<div class="overflow-x-auto"><table class="w-full">'
             '<thead class="bg-[#FFF9F4]"><tr>'
             '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Message</th>'
