@@ -1962,12 +1962,12 @@ async def _admin_dashboard(request: Request):
             bresp = E(str(c.get('bot_response',''))[:80])
             cdate = E(str(c.get('created_at',''))[:10])
             clickable_rows += (
-                f"<tr onclick=\"openConvo('{sid}')\" style='border-bottom:1px solid #FFE4CC;cursor:pointer' "
-                f"onmouseover=\"this.style.background='#FFF0DB'\" onmouseout=\"this.style.background=''\">" 
-                f"<td class='px-4 py-3 text-xs font-mono text-[#8B6914]'>{sid_disp}</td>"
-                f"<td class='px-4 py-3 text-sm text-[#2D1B00]'>{umsg}</td>"
-                f"<td class='px-4 py-3 text-sm text-[#5A3A1B]'>{bresp}...</td>"
-                f"<td class='px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap'>{cdate}</td></tr>"
+                '<tr class="convo-row" data-sid="' + sid + '" '
+                'style="border-bottom:1px solid #FFE4CC;cursor:pointer">'
+                '<td class="px-4 py-3 text-xs font-mono text-[#8B6914]">' + sid_disp + '</td>'
+                '<td class="px-4 py-3 text-sm text-[#2D1B00]">' + umsg + '</td>'
+                '<td class="px-4 py-3 text-sm text-[#5A3A1B]">' + bresp + '...</td>'
+                '<td class="px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap">' + cdate + '</td></tr>'
             )
         if not clickable_rows:
             clickable_rows = "<tr><td colspan='4' class='px-4 py-4 text-sm text-center text-[#8B6914]'>No conversations yet</td></tr>"
@@ -1984,19 +1984,7 @@ async def _admin_dashboard(request: Request):
             "<div id='convo-overlay' onclick=\"document.getElementById('convo-drawer').style.display='none';"
             "document.getElementById('convo-overlay').style.display='none'\" "
             "style='display:none;position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:999'></div>"
-            "<script>"
-            "function openConvo(sid){"
-            "  var d=document.getElementById('convo-drawer');"
-            "  var b=document.getElementById('convo-drawer-body');"
-            "  var o=document.getElementById('convo-overlay');"
-            "  b.innerHTML='<div style=\'padding:2rem;text-align:center;color:#8B6914\'>Loading...</div>';"
-            "  d.style.display='block';o.style.display='block';"
-            "  fetch('/admin/conversation/'+sid,{credentials:'same-origin'})"
-            "  .then(function(r){return r.text();})"
-            "  .then(function(html){b.innerHTML=html;})"
-            "  .catch(function(e){b.innerHTML='<p style=\'color:red;padding:1rem\'>'+e.message+'</p>';});"
-            "}"
-            "</script>"
+            "<script>""function openConvo(sid){""  var d=document.getElementById('convo-drawer');""  var b=document.getElementById('convo-drawer-body');""  var o=document.getElementById('convo-overlay');""  b.innerHTML='<div style=\"padding:2rem;text-align:center;color:#8B6914\">Loading...</div>';""  d.style.display='block';o.style.display='block';""  fetch('/admin/conversation/'+encodeURIComponent(sid),{credentials:'same-origin'})""  .then(function(r){return r.text();})""  .then(function(html){b.innerHTML=html;})""  .catch(function(e){b.innerHTML='<p style=\"color:red;padding:1rem\">'+e.message+'</p>';});""}""document.addEventListener('click',function(e){""  var row=e.target.closest('.convo-row');""  if(row){openConvo(row.dataset.sid);}""});""document.querySelectorAll('.convo-row').forEach(function(r){""  r.onmouseover=function(){this.style.background='#FFF0DB';};""  r.onmouseout=function(){this.style.background='';};""});""</script>"
         )
 
         convs_panel = card(
