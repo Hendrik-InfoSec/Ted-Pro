@@ -1741,6 +1741,45 @@ async def conversations_rows(request: Request):
         return HTMLResponse(f'<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-red-500">Error loading: {e}</td></tr>')
 
 
+@app.get("/admin/data", response_class=HTMLResponse)
+async def admin_data(request: Request):
+    """Plain, dependency-free view of leads + conversations. Always works."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    try:
+        sb = _get_supabase()
+        E = _esc_html
+        leads = sb.table("leads").select("*").order("timestamp", desc=True).limit(100).execute().data or []
+        convs = sb.table("conversations").select("*").eq("client_id", "tedpro_client").order("created_at", desc=True).limit(100).execute().data or []
+
+        h = ["<!DOCTYPE html><html><head><meta charset='utf-8'><title>TedPro Data</title>",
+             "<style>body{font-family:sans-serif;background:#FFF9F4;color:#2D1B00;padding:24px}",
+             "table{border-collapse:collapse;width:100%;background:white;margin-bottom:32px}",
+             "th,td{border:1px solid #FFE4CC;padding:8px 12px;text-align:left;font-size:13px;vertical-align:top}",
+             "th{background:#FFF0DB;text-transform:uppercase;font-size:11px;color:#8B6914}",
+             "h1{font-size:20px} h2{font-size:16px;color:#8B6914}",
+             "a{color:#FF922B}</style></head><body>",
+             "<h1>&#129528; TedPro Data <a href='/admin' style='font-size:13px'>back to dashboard</a> ",
+             "<a href='/admin/conversations/export' style='font-size:13px'>export CSV</a></h1>"]
+
+        h.append(f"<h2>Leads ({len(leads)})</h2><table><tr><th>Name</th><th>Email</th><th>Date</th></tr>")
+        for l in leads:
+            h.append("<tr><td>" + E(l.get("name","")) + "</td><td>" + E(l.get("email","")) +
+                     "</td><td>" + E(str(l.get("timestamp",""))[:16]) + "</td></tr>")
+        h.append("</table>")
+
+        h.append(f"<h2>Conversations ({len(convs)})</h2><table><tr><th>Session</th><th>Customer</th><th>Teddy</th><th>Date</th></tr>")
+        for c in convs:
+            h.append("<tr><td style='font-family:monospace'>" + E(str(c.get("session_id",""))[:8]) +
+                     "</td><td>" + E(str(c.get("user_message",""))[:200]) +
+                     "</td><td>" + E(str(c.get("bot_response",""))[:200]) +
+                     "</td><td style='white-space:nowrap'>" + E(str(c.get("created_at",""))[:16]) + "</td></tr>")
+        h.append("</table></body></html>")
+        return HTMLResponse("".join(h))
+    except Exception as e:
+        return HTMLResponse(f"<pre>data page error: {e}</pre>")
+
+
 @app.get("/admin/selftest", response_class=HTMLResponse)
 async def admin_selftest(request: Request):
     """Server inspects its own dashboard output — plain-text diagnostic."""
