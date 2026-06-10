@@ -1800,196 +1800,127 @@ async def _admin_dashboard(request: Request):
     try:
         sb = _get_supabase()
 
-        leads_count    = len(sb.table("leads").select("id", count="exact").execute().data)
-        conv_count     = len(sb.table("conversations").select("id", count="exact").execute().data)
-        products_count = len(sb.table("products").select("id", count="exact").execute().data)
-        faqs_count     = len(sb.table("faqs").select("id").eq("client_id", "tedpro_client").execute().data or [])
-        today          = datetime.now().date().isoformat()
-        today_leads    = len(sb.table("leads").select("id").gte("timestamp", today).execute().data)
-
         leads_data    = sb.table("leads").select("*").order("timestamp", desc=True).limit(50).execute().data or []
         convs_data    = sb.table("conversations").select("*").eq("client_id", "tedpro_client").order("created_at", desc=True).limit(50).execute().data or []
         products_data = sb.table("products").select("*").order("name").execute().data or []
+        leads_count    = len(sb.table("leads").select("id").execute().data or [])
+        conv_count     = len(sb.table("conversations").select("id").execute().data or [])
+        products_count = len(sb.table("products").select("id").execute().data or [])
+        faqs_count     = len(sb.table("faqs").select("id").eq("client_id", "tedpro_client").execute().data or [])
+        today          = datetime.now().date().isoformat()
+        today_leads    = len(sb.table("leads").select("id").gte("timestamp", today).execute().data or [])
 
-        def metric(label, value):
-            return (
-                f'<div class="bg-white p-4 rounded-xl shadow-sm border border-[#FFE4CC]">'
-                f'<p class="text-xs text-[#8B6914] uppercase tracking-wide">{label}</p>'
-                f'<p class="text-2xl font-bold text-[#FF922B] mt-1">{value}</p></div>'
-            )
+        E = _esc_html
 
-        def tbl(title, headers, rows):
-            ths  = "".join(f'<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">{h}</th>' for h in headers)
-            body = rows or '<tr><td colspan="99" class="px-4 py-4 text-sm text-center text-[#8B6914]">No data yet</td></tr>'
-            return (
-                f'<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-6">'
-                f'<div class="px-4 py-3 border-b border-[#FFE4CC]"><h2 class="font-bold text-[#2D1B00] text-sm">{title}</h2></div>'
-                f'<div class="overflow-x-auto"><table class="w-full">'
-                f'<thead class="bg-[#FFF9F4]"><tr>{ths}</tr></thead><tbody>{body}</tbody>'
-                f'</table></div></div>'
-            )
-
+        # ---- leads rows (all content escaped) ----
         leads_rows = "".join(
-            f'<tr class="border-b border-[#FFE4CC]">'
-            f'<td class="px-4 py-2 text-sm text-[#2D1B00]">{l.get("name","")}</td>'
-            f'<td class="px-4 py-2 text-sm text-[#2D1B00]">{l.get("email","")}</td>'
-            f'<td class="px-4 py-2 text-sm text-[#8B6914]">{str(l.get("timestamp",""))[:10]}</td></tr>'
+            "<tr class='border-b border-[#FFE4CC]'>"
+            "<td class='px-4 py-2 text-sm text-[#2D1B00]'>" + E(l.get("name", "")) + "</td>"
+            "<td class='px-4 py-2 text-sm text-[#2D1B00]'>" + E(l.get("email", "")) + "</td>"
+            "<td class='px-4 py-2 text-sm text-[#8B6914]'>" + E(str(l.get("timestamp", ""))[:10]) + "</td></tr>"
             for l in leads_data
+        ) or "<tr><td colspan='3' class='px-4 py-4 text-sm text-center text-[#8B6914]'>No leads yet</td></tr>"
+
+        # ---- conversations rows (all content escaped, inlined server-side) ----
+        convs_rows = "".join(
+            "<tr class='border-b border-[#FFE4CC] hover:bg-[#FFFAF5]'>"
+            "<td class='px-4 py-3 text-xs font-mono text-[#8B6914]'>" + E(str(c.get("session_id", ""))[:8]) + "</td>"
+            "<td class='px-4 py-3 text-sm text-[#2D1B00]'>" + E(str(c.get("user_message", ""))[:80]) + "</td>"
+            "<td class='px-4 py-3 text-sm text-[#5A3A1B]'>" + E(str(c.get("bot_response", ""))[:80]) + "...</td>"
+            "<td class='px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap'>" + E(str(c.get("created_at", ""))[:10]) + "</td></tr>"
+            for c in convs_data
+        ) or "<tr><td colspan='4' class='px-4 py-4 text-sm text-center text-[#8B6914]'>No conversations yet</td></tr>"
+
+        # ---- product rows: escape every string field before rendering ----
+        def _safe_product(p):
+            return {k: (E(v) if isinstance(v, str) else v) for k, v in p.items()}
+        product_rows = "".join(_render_product_row(_safe_product(p)) for p in products_data) or \
+            "<tr><td colspan='5' class='px-4 py-4 text-sm text-center text-[#8B6914]'>No products yet — upload a catalog below</td></tr>"
+
+        # ---- reusable panel card ----
+        def card(title_html, head_cells, body_html, extra_header=""):
+            ths = "".join("<th class='px-4 py-2 text-left text-xs text-[#8B6914] uppercase'>" + h + "</th>" for h in head_cells)
+            return (
+                "<div class='bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4'>"
+                "<div class='px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center'>"
+                "<h2 class='font-bold text-[#2D1B00] text-sm'>" + title_html + "</h2>" + extra_header + "</div>"
+                "<div class='overflow-x-auto'><table class='w-full'>"
+                "<thead class='bg-[#FFF9F4]'><tr>" + ths + "</tr></thead>"
+                "<tbody>" + body_html + "</tbody></table></div></div>"
+            )
+
+        leads_panel = card("&#128101; All Leads", ["Name", "Email", "Date"], leads_rows)
+        convs_panel = card(
+            "&#128172; Recent Conversations",
+            ["Session", "Customer Message", "Teddy Response", "Date"],
+            convs_rows,
+            "<a href='/admin/conversations/export' class='text-xs text-[#FF922B] hover:underline font-semibold'>&#128229; Export CSV</a>",
         )
-        # conversations now loaded async via /admin/conversations/rows
+        products_panel = card(
+            "&#127987; Product Catalog <span class='ml-2 text-xs font-normal text-[#8B6914]'>(" + str(products_count) + " products — click row to expand)</span>",
+            ["Name", "Category", "SKU", "Price", "Stock"],
+            product_rows,
+        ) + UPLOAD_CARD
 
-        # Product catalog — expandable rows with inline stock toggle
-        product_catalog_rows = "".join(_render_product_row(p) for p in products_data)
-        product_catalog = (
-            '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-6">'
-            '<div class="px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center">'
-            '<h2 class="font-bold text-[#2D1B00] text-sm">&#127987; Product Catalog '
-            f'<span class="ml-2 text-xs font-normal text-[#8B6914]">({products_count} products — click row to expand)</span></h2>'
-            '</div>'
-            '<div class="overflow-x-auto"><table class="w-full">'
-            '<thead class="bg-[#FFF9F4]"><tr>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">Name</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">Category</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">SKU</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">Price</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase tracking-wide">Stock</th>'
-            '</tr></thead>'
-            '<tbody>' + (product_catalog_rows or '<tr><td colspan="5" class="px-4 py-4 text-sm text-center text-[#8B6914]">No products yet — upload a catalog below</td></tr>') + '</tbody>'
-            '</table></div></div>'
-        )
+        # ---- tab buttons: data-tab + onclick, zero quote-escaping needed ----
+        def tab_button(tid, label, value, active=False):
+            base = "border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;width:100%;font-family:inherit;"
+            style = ("background:#FF922B;color:white;border:2px solid #FF922B;" if active
+                     else "background:white;color:#5A3A1B;border:2px solid #FFE4CC;") + base
+            return (
+                "<button id='tab-" + tid + "' data-tab='" + tid + "' onclick='showPanel(this.dataset.tab)' style='" + style + "'>"
+                "<p style='font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.85'>" + label + "</p>"
+                "<p style='font-size:28px;font-weight:700;margin-top:4px'>" + str(value) + "</p></button>"
+            )
 
-        # ── Tab panels ──────────────────────────────────────────────────────
-        leads_panel = (
-            '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
-            '<div class="px-4 py-3 border-b border-[#FFE4CC]">'
-            '<h2 class="font-bold text-[#2D1B00] text-sm">&#128101; All Leads</h2></div>'
-            '<div class="overflow-x-auto"><table class="w-full">'
-            '<thead class="bg-[#FFF9F4]"><tr>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Name</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Email</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Date</th>'
-            '</tr></thead><tbody>'
-            + (leads_rows or '<tr><td colspan="3" class="px-4 py-4 text-sm text-center text-[#8B6914]">No leads yet</td></tr>')
-            + '</tbody></table></div></div>'
-        )
-
-        products_panel = product_catalog + UPLOAD_CARD
-
-        convs_panel = (
-            '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4">'
-            '<div class="px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center">'
-            '<h2 class="font-bold text-[#2D1B00] text-sm">&#128172; Recent Conversations</h2>'
-            '<a href="/admin/conversations/export" '
-            'class="text-xs text-[#FF922B] hover:underline font-semibold">&#128229; Export CSV</a></div>'
-            '<div class="overflow-x-auto"><table class="w-full">'
-            '<thead class="bg-[#FFF9F4]"><tr>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Session</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Customer Message</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Teddy Response</th>'
-            '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Date</th>'
-            '</tr></thead>'
-            '<tbody id="convs-tbody">'
-            '<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">Loading...</td></tr>'
-            '</tbody></table></div></div>'
-            '<div id="convs-debug" style="padding:12px;background:#FFF0DB;font-size:12px;color:#2D1B00">Fetching conversations...</div>'
-            '<script>'
-            'document.getElementById("convs-debug").textContent="Script running...";'
-            'fetch("/admin/conversations/rows",{credentials:"same-origin"})'
-            '.then(function(r){'
-            '  document.getElementById("convs-debug").textContent="Got response: "+r.status;'
-            '  return r.text();'
-            '})'
-            '.then(function(html){'
-            '  document.getElementById("convs-debug").textContent="HTML length: "+html.length;'
-            '  var b=document.getElementById("convs-tbody");'
-            '  if(b){b.innerHTML=html;document.getElementById("convs-debug").textContent="Done! Rows: "+b.rows.length;}'
-            '  else{document.getElementById("convs-debug").textContent="ERROR: convs-tbody not found";}'
-            '})'
-            '.catch(function(e){document.getElementById("convs-debug").textContent="FETCH ERROR: "+e.message;});'
-            '</script>'
+        tabs_html = (
+            "<div class='grid grid-cols-2 md:grid-cols-5 gap-4 mb-6'>"
+            + tab_button("leads", "Total Leads", leads_count, active=True)
+            + "<button id='tab-today' data-tab='leads' onclick='showPanel(this.dataset.tab)' "
+              "style='background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;"
+              "text-align:left;cursor:pointer;transition:all .2s;width:100%;font-family:inherit'>"
+              "<p style='font-size:11px;text-transform:uppercase;letter-spacing:.05em'>Today</p>"
+              "<p style='font-size:28px;font-weight:700;margin-top:4px'>" + str(today_leads) + "</p></button>"
+            + tab_button("products", "Products", products_count)
+            + tab_button("faqs", "FAQs", faqs_count)
+            + tab_button("conversations", "Conversations", conv_count)
+            + "</div>"
         )
 
-        # ── Tab card click JS ───────────────────────────────────────────────────
         tab_js = (
-            '<script>'
-            'function switchTab(t){'
-            '  var ids=["leads","products","faqs","conversations"];'
-            '  ids.forEach(function(id){'
-            '    var p=document.getElementById("panel-"+id);'
-            '    var b=document.getElementById("tab-"+id);'
-            '    if(p)p.style.display=id===t?"block":"none";'
-            '    if(b&&id===t){b.style.background="#FF922B";b.style.color="white";b.style.borderColor="#FF922B";}'
-            '    if(b&&id!==t){b.style.background="white";b.style.color="#5A3A1B";b.style.borderColor="#FFE4CC";}'
-            '  });'
-            '}'
-            '</script>'
+            "<script>"
+            "function showPanel(t){"
+            "var names=['leads','products','faqs','conversations'];"
+            "for(var i=0;i<names.length;i++){"
+            "var id=names[i];"
+            "var p=document.getElementById('panel-'+id);"
+            "var b=document.getElementById('tab-'+id);"
+            "if(p){p.style.display=(id===t)?'block':'none';}"
+            "if(b){if(id===t){b.style.background='#FF922B';b.style.color='white';b.style.borderColor='#FF922B';}"
+            "else{b.style.background='white';b.style.color='#5A3A1B';b.style.borderColor='#FFE4CC';}}"
+            "}}"
+            "</script>"
         )
+
         content = (
-            '<div class="min-h-screen bg-[#FFF9F4] p-4">'
-            '<div class="max-w-5xl mx-auto">'
-
-            # Header
-            '<div class="flex justify-between items-center mb-6">'
-            '<h1 class="text-2xl font-bold text-[#2D1B00]">\U0001f4ca Admin Dashboard</h1>'
-            '<a href="/admin/logout" class="text-sm text-[#8B6914] hover:text-[#FF922B]">Logout</a></div>'
-            '<div id="dbg" style="padding:10px 14px;background:#FFF0DB;border:1px solid #FFD5A5;border-radius:8px;font-size:12px;color:#2D1B00;margin-bottom:16px">Debug: page loaded. Click Conversations tab.</div>'
-            '<script>'
-            'function testConvs(){'
-            '  var d=document.getElementById("dbg");'
-            '  d.textContent="Fetching /admin/conversations/rows...";'
-            '  fetch("/admin/conversations/rows",{credentials:"same-origin"})'
-            '  .then(function(r){d.textContent="Response status: "+r.status+" — reading body...";return r.text();})'
-            '  .then(function(h){'
-            '    d.textContent="Body length: "+h.length+" chars. Looking for tbody...";'
-            '    var b=document.getElementById("convs-tbody");'
-            '    if(!b){d.textContent="ERROR: convs-tbody element not found in DOM!";return;}'
-            '    b.innerHTML=h;'
-            '    d.textContent="SUCCESS: loaded "+b.rows.length+" rows into table.";'
-            '  })'
-            '  .catch(function(e){d.textContent="FETCH ERROR: "+e.message;});'
-            '}'
-            'var _origSwitch=window.switchTab;'
-            'window.switchTab=function(t){'
-            '  if(t==="conversations")testConvs();'
-            '  if(_origSwitch)_origSwitch(t);'
-            '};'
-            '</script>'
-
-            # Tab cards — clickable metric cards, Conversations last on right
-            # Tab cards
-            + '<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">'
-            + '<button id="tab-leads" onclick="switchTab(\'leads\')" style="background:#FF922B;color:white;border:2px solid #FF922B;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;transform:translateY(-2px);box-shadow:0 4px 12px rgba(255,146,43,0.3);width:100%;font-family:inherit">'
-            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.85">Total Leads</p>'
-            + f'<p style="font-size:28px;font-weight:700;margin-top:4px">{leads_count}</p></button>'
-            + '<button id="tab-today" onclick="switchTab(\'leads\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
-            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Today</p>'
-            + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{today_leads}</p></button>'
-            + '<button id="tab-products" onclick="switchTab(\'products\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
-            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Products</p>'
-            + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{products_count}</p></button>'
-            + '<button id="tab-faqs" onclick="switchTab(\'faqs\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
-            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">FAQs</p>'
-            + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{faqs_count}</p></button>'
-            + '<button id="tab-conversations" onclick="switchTab(\'conversations\')" style="background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;text-align:left;cursor:pointer;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);width:100%;font-family:inherit">'
-            + '<p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B6914">Conversations</p>'
-            + f'<p style="font-size:28px;font-weight:700;margin-top:4px;color:#FF922B">{conv_count}</p></button>'
-
-            + '</div>'  # close grid
-
-            # Panels sit OUTSIDE the grid — full width
-            + '<div style="margin-top:1.5rem">'
-            + '<div id="panel-leads" style="display:block">' + leads_panel + '</div>'
-            + '<div id="panel-products" style="display:none">' + products_panel + '</div>'
-            + '<div id="panel-faqs" style="display:none">' + _build_faq_panel() + '</div>'
-            + '<div id="panel-conversations" style="display:none">' + convs_panel + '</div>'
-            + '</div>'
-
+            "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-5xl mx-auto'>"
+            "<div class='flex justify-between items-center mb-6'>"
+            "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f4ca Admin Dashboard "
+            "<span style='font-size:11px;font-weight:400;color:#8B6914'>v3</span></h1>"
+            "<a href='/admin/logout' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Logout</a></div>"
+            + tabs_html
+            + "<div style='margin-top:1.5rem'>"
+            + "<div id='panel-leads' style='display:block'>" + leads_panel + "</div>"
+            + "<div id='panel-products' style='display:none'>" + products_panel + "</div>"
+            + "<div id='panel-faqs' style='display:none'>" + _build_faq_panel() + "</div>"
+            + "<div id='panel-conversations' style='display:none'>" + convs_panel + "</div>"
+            + "</div>"
             + tab_js
-            + '</div></div>'
+            + "</div></div>"
         )
         return HTMLResponse(content=render_page("Admin Dashboard", content, include_admin_js=True))
     except Exception as e:
-        logger.error(f"Admin error: {e}")
+        logger.error(f"Admin error: {e}", exc_info=True)
         return HTMLResponse(f'<div class="p-8 text-red-500">Dashboard error: {e}</div>')
 
 
