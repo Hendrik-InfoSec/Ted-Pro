@@ -1018,6 +1018,7 @@ def _build_faq_panel() -> str:
         '  .catch(function(e){res.innerHTML="<p style=\'color:#991b1b;font-size:12px\'>"+e.message+"</p>";});'
         '}'
         '</script>'
+        '</div>'
     )
 
 
@@ -1970,7 +1971,7 @@ async def _admin_dashboard(request: Request):
             "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-5xl mx-auto'>"
             "<div class='flex justify-between items-center mb-6'>"
             "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f4ca Admin Dashboard "
-            "<span style='font-size:11px;font-weight:400;color:#8B6914'>v3</span></h1>"
+            "<span style='font-size:11px;font-weight:400;color:#8B6914'>v3.1</span></h1>"
             "<a href='/admin/logout' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Logout</a></div>"
             + tabs_html
             + "<div style='margin-top:1.5rem'>"
