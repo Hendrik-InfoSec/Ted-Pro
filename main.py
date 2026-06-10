@@ -1741,6 +1741,31 @@ async def conversations_rows(request: Request):
         return HTMLResponse(f'<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-red-500">Error loading: {e}</td></tr>')
 
 
+@app.get("/admin/selftest", response_class=HTMLResponse)
+async def admin_selftest(request: Request):
+    """Server inspects its own dashboard output — plain-text diagnostic."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    try:
+        resp = await _admin_dashboard(request)
+        html = resp.body.decode()
+        lines = [f"status: {resp.status_code}", f"total HTML: {len(html)} chars", ""]
+        for marker in ["panel-leads", "panel-products", "panel-faqs", "panel-conversations",
+                       "function showPanel", "All Leads", "Recent Conversations",
+                       "margin-top:1.5rem", "</body>"]:
+            pos = html.find(marker)
+            lines.append(f"{marker}: {('FOUND at char ' + str(pos)) if pos >= 0 else 'MISSING'}")
+        if "panel-conversations" in html:
+            seg = html[html.find("panel-conversations"):]
+            lines.append(f"rows in conversations panel: {seg[:20000].count('<tr')}")
+        if "panel-leads" in html:
+            seg = html[html.find("panel-leads"):]
+            lines.append(f"rows in leads panel: {seg[:5000].count('<tr')}")
+        return HTMLResponse("<pre style='padding:20px;font-size:13px'>" + "\n".join(lines) + "</pre>")
+    except Exception as e:
+        return HTMLResponse(f"<pre>SELFTEST ERROR: {e}</pre>")
+
+
 @app.get("/admin/conversations/export")
 async def export_conversations(request: Request):
     """Download all conversations as CSV."""
