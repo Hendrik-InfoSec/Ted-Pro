@@ -1888,9 +1888,15 @@ async def _admin_dashboard(request: Request):
             '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Teddy Response</th>'
             '<th class="px-4 py-2 text-left text-xs text-[#8B6914] uppercase">Date</th>'
             '</tr></thead>'
-            '<tbody hx-get="/admin/conversations/rows" hx-trigger="load" hx-swap="innerHTML">'
-            '<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">Loading conversations...</td></tr>'
+            '<tbody id="convs-tbody">'
+            '<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">Loading...</td></tr>'
             '</tbody></table></div></div>'
+            '<script>'
+            'fetch("/admin/conversations/rows",{credentials:"same-origin"})'
+            '.then(function(r){return r.text();})'
+            '.then(function(html){var b=document.getElementById("convs-tbody");if(b)b.innerHTML=html;})'
+            '.catch(function(e){var b=document.getElementById("convs-tbody");if(b)b.innerHTML="<tr><td colspan=4 style=padding:1rem;color:red>Error: "+e.message+"</td></tr>";});'
+            '</script>'
         )
 
         # ── Tab card click JS ───────────────────────────────────────────────────
