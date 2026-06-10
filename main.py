@@ -1781,6 +1781,43 @@ async def admin_data(request: Request):
         return HTMLResponse(f"<pre>data page error: {e}</pre>")
 
 
+@app.get("/admin/conversation/{session_id}", response_class=HTMLResponse)
+async def view_conversation(request: Request, session_id: str):
+    """Return full conversation history for a session as HTML panel."""
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("Not authenticated", status_code=401)
+    try:
+        sb = _get_supabase()
+        rows = sb.table("conversations").select("user_message,bot_response,created_at")             .eq("session_id", session_id).eq("client_id", "tedpro_client")             .order("created_at", desc=False).limit(100).execute().data or []
+        E = _esc_html
+        bubbles = []
+        for r in rows:
+            t = str(r.get("created_at",""))[:16].replace("T"," ")
+            umsg = E(r.get("user_message",""))
+            bresp = E(r.get("bot_response",""))
+            bubbles.append(
+                f"<div style='margin-bottom:16px'>"
+                f"<div style='display:flex;justify-content:flex-end;margin-bottom:6px'>"
+                f"<div style='background:#FF922B;color:white;padding:10px 14px;border-radius:16px 16px 4px 16px;max-width:75%;font-size:13px'>"
+                f"{umsg}<div style='font-size:10px;opacity:.7;margin-top:4px;text-align:right'>{t}</div></div></div>"
+                f"<div style='display:flex;justify-content:flex-start'>"
+                f"<div style='background:white;border:1px solid #FFE4CC;padding:10px 14px;border-radius:16px 16px 16px 4px;max-width:75%;font-size:13px;color:#2D1B00'>"
+                f"🧸 {bresp}<div style='font-size:10px;color:#8B6914;margin-top:4px'>{t}</div></div></div>"
+                f"</div>"
+            )
+        content = "".join(bubbles) if bubbles else "<p style='color:#8B6914;text-align:center;padding:2rem'>No messages found.</p>"
+        sid_short = E(session_id[:8])
+        return HTMLResponse(
+            f"<div style='padding:16px'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #FFE4CC'>"
+            f"<span style='font-weight:700;color:#2D1B00;font-size:14px'>&#128172; Session {sid_short}...</span>"
+            f"<span style='font-size:12px;color:#8B6914'>{len(rows)} messages</span></div>"
+            f"{content}</div>"
+        )
+    except Exception as e:
+        return HTMLResponse(f"<p style='color:red;padding:1rem'>Error: {_esc_html(str(e))}</p>")
+
+
 @app.get("/admin/selftest", response_class=HTMLResponse)
 async def admin_selftest(request: Request):
     """Server inspects its own dashboard output — plain-text diagnostic."""
@@ -1915,12 +1952,59 @@ async def _admin_dashboard(request: Request):
             )
 
         leads_panel = card("&#128101; All Leads", ["Name", "Email", "Date"], leads_rows)
+        # Make each conversation row clickable
+        clickable_rows = ""
+        for c in convs_data:
+            sid = c.get('session_id','')
+            E = _esc_html
+            sid_disp = E(sid[:8])
+            umsg = E(str(c.get('user_message',''))[:80])
+            bresp = E(str(c.get('bot_response',''))[:80])
+            cdate = E(str(c.get('created_at',''))[:10])
+            clickable_rows += (
+                f"<tr onclick=\"openConvo('{sid}')\" style='border-bottom:1px solid #FFE4CC;cursor:pointer' "
+                f"onmouseover=\"this.style.background='#FFF0DB'\" onmouseout=\"this.style.background=''\">" 
+                f"<td class='px-4 py-3 text-xs font-mono text-[#8B6914]'>{sid_disp}</td>"
+                f"<td class='px-4 py-3 text-sm text-[#2D1B00]'>{umsg}</td>"
+                f"<td class='px-4 py-3 text-sm text-[#5A3A1B]'>{bresp}...</td>"
+                f"<td class='px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap'>{cdate}</td></tr>"
+            )
+        if not clickable_rows:
+            clickable_rows = "<tr><td colspan='4' class='px-4 py-4 text-sm text-center text-[#8B6914]'>No conversations yet</td></tr>"
+
+        convo_drawer = (
+            "<div id='convo-drawer' style='display:none;position:fixed;top:0;right:0;width:420px;max-width:95vw;"
+            "height:100vh;background:white;box-shadow:-4px 0 24px rgba(0,0,0,0.15);z-index:1000;overflow-y:auto;font-family:Quicksand,sans-serif'>"
+            "<div style='position:sticky;top:0;background:white;padding:14px 16px;border-bottom:1px solid #FFE4CC;"
+            "display:flex;justify-content:space-between;align-items:center;z-index:1'>"
+            "<span style='font-weight:700;color:#2D1B00;font-size:15px'>&#128172; Conversation</span>"
+            "<button onclick=\"document.getElementById('convo-drawer').style.display='none'\" "
+            "style='background:none;border:none;font-size:22px;cursor:pointer;color:#8B6914;line-height:1'>&times;</button></div>"
+            "<div id='convo-drawer-body' style='padding:0'>Loading...</div></div>"
+            "<div id='convo-overlay' onclick=\"document.getElementById('convo-drawer').style.display='none';"
+            "document.getElementById('convo-overlay').style.display='none'\" "
+            "style='display:none;position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:999'></div>"
+            "<script>"
+            "function openConvo(sid){"
+            "  var d=document.getElementById('convo-drawer');"
+            "  var b=document.getElementById('convo-drawer-body');"
+            "  var o=document.getElementById('convo-overlay');"
+            "  b.innerHTML='<div style=\'padding:2rem;text-align:center;color:#8B6914\'>Loading...</div>';"
+            "  d.style.display='block';o.style.display='block';"
+            "  fetch('/admin/conversation/'+sid,{credentials:'same-origin'})"
+            "  .then(function(r){return r.text();})"
+            "  .then(function(html){b.innerHTML=html;})"
+            "  .catch(function(e){b.innerHTML='<p style=\'color:red;padding:1rem\'>'+e.message+'</p>';});"
+            "}"
+            "</script>"
+        )
+
         convs_panel = card(
             "&#128172; Recent Conversations",
             ["Session", "Customer Message", "Teddy Response", "Date"],
-            convs_rows,
+            clickable_rows,
             "<a href='/admin/conversations/export' class='text-xs text-[#FF922B] hover:underline font-semibold'>&#128229; Export CSV</a>",
-        )
+        ) + convo_drawer
         products_panel = card(
             "&#127987; Product Catalog <span class='ml-2 text-xs font-normal text-[#8B6914]'>(" + str(products_count) + " products — click row to expand)</span>",
             ["Name", "Category", "SKU", "Price", "Stock"],
@@ -2054,3 +2138,34 @@ async def _dev_dashboard(request: Request):
         '</div></div>'
     )
     return HTMLResponse(content=render_page("Dev Tools", content))
+
+
+# ---------------------------------------------------------------------------
+# Embed script — one line of HTML that any website can drop in
+# ---------------------------------------------------------------------------
+@app.get("/embed.js")
+async def embed_script():
+    from fastapi.responses import Response
+    base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
+    js = f"""(function(){{
+  if(window.__tedpro_loaded)return;
+  window.__tedpro_loaded=true;
+  var s=document.createElement('style');
+  s.textContent='#tedpro-btn{{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#FF922B,#FF8C42);border:none;cursor:pointer;font-size:26px;box-shadow:0 4px 16px rgba(255,146,43,0.5);z-index:99998;transition:transform .2s}}#tedpro-btn:hover{{transform:scale(1.1)}}#tedpro-frame{{display:none;position:fixed;bottom:92px;right:24px;width:380px;height:580px;border:none;border-radius:20px;box-shadow:0 8px 40px rgba(0,0,0,0.18);z-index:99999}}@media(max-width:480px){{#tedpro-frame{{width:calc(100vw - 16px);height:calc(100vh - 100px);bottom:92px;right:8px}}}}';
+  document.head.appendChild(s);
+  var btn=document.createElement('button');
+  btn.id='tedpro-btn';btn.innerHTML='🧸';btn.title='Chat with us';
+  var frame=document.createElement('iframe');
+  frame.id='tedpro-frame';frame.src='{base}';frame.allow='microphone';
+  var open=false;
+  btn.onclick=function(){{
+    open=!open;
+    frame.style.display=open?'block':'none';
+    btn.innerHTML=open?'✕':'🧸';
+    if(open&&!frame._loaded){{frame._loaded=true;}}
+  }};
+  document.body.appendChild(btn);
+  document.body.appendChild(frame);
+}})();"""
+    return Response(content=js, media_type="application/javascript",
+                    headers={"Cache-Control": "public, max-age=3600"})
