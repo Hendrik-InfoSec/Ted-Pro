@@ -2144,7 +2144,7 @@ async def embed_script():
   var btn=document.createElement('button');
   btn.id='tedpro-btn';btn.innerHTML='🧸';btn.title='Chat with us';
   var frame=document.createElement('iframe');
-  frame.id='tedpro-frame';frame.src='{base}';frame.allow='microphone';
+  frame.id='tedpro-frame';frame.src='{base}/chat-widget';frame.allow='microphone';
   var open=false;
   btn.onclick=function(){{
     open=!open;
@@ -2157,3 +2157,42 @@ async def embed_script():
 }})();"""
     return Response(content=js, media_type="application/javascript",
                     headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/chat-widget", response_class=HTMLResponse)
+async def chat_widget(request: Request):
+    """Compact widget page for iframe embedding."""
+    init_session(request)
+    session_id = request.session["session_id"]
+    history = load_history(session_id)
+    messages_html = "".join(
+        user_bubble(m["content"], m.get("time","")) if m["role"]=="user"
+        else bot_bubble(m["content"], m.get("time",""))
+        for m in history
+    )
+    if not messages_html:
+        messages_html = (
+            '<div style="text-align:center;padding:20px;color:#8B6914;font-size:13px">'
+            '&#128075; Hi! Ask me anything about CuddleHeros plushies!</div>'
+        )
+    scroll_js = "var m=document.getElementById('chat-messages');m.scrollTop=m.scrollHeight;"
+    content = (
+        '<div style="display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#FFF9F4">'
+        '<div style="background:linear-gradient(135deg,#FF922B,#FF8C42);color:white;'
+        'padding:12px 16px;text-align:center;flex-shrink:0">'
+        '<div style="font-size:22px">&#129528;</div>'
+        '<div style="font-weight:700;font-size:14px">Teddy</div>'
+        '<div style="font-size:11px;opacity:.85">Your CuddleHeros Assistant</div></div>'
+        '<div id="chat-messages" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px">'
+        + messages_html +
+        '</div>'
+        '<div style="padding:10px;background:#FFF9F4;border-top:1px solid #FFE4CC;flex-shrink:0">'
+        f'<form id="chat-form" hx-post="/chat" hx-target="#chat-messages" hx-swap="beforeend" '
+        f'hx-on::after-request="this.reset();{scroll_js}" '
+        'style="display:flex;gap:8px">'
+        '<input type="text" name="prompt" placeholder="Ask Teddy..." required autocomplete="off" '
+        'style="flex:1;padding:10px 14px;border-radius:20px;border:1.5px solid #FFD5A5;background:white;font-size:13px;outline:none;font-family:inherit">'
+        '<button type="submit" style="padding:10px 18px;border-radius:20px;background:#FF922B;color:white;border:none;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">Send</button>'
+        '</form></div></div>'
+    )
+    return HTMLResponse(content=render_page("Teddy", content))
