@@ -207,6 +207,8 @@ class HybridEngine:
                 "- If asked something off-topic, answer briefly then steer back to CuddleHeros\n"
                 "- Keep responses under 150 words unless detail is genuinely needed\n"
                 "- Never make up product details — only reference what you are given in context\n"
+                "- NEVER end with filler closers like Stay cozy or Ready to assist\\n"
+                "- One closing line maximum per response\\n"
             )
 
             full_answer = ""
