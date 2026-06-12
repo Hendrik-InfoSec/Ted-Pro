@@ -89,6 +89,13 @@ def apply_teddy_vibes(text: str) -> str:
         "Waiting for your next question! ✨",
         "Teddy out! 🐾"
     ]
+    # Strip any AI-generated sign-offs before checking/adding our own
+    ai_signoffs = [
+        "Ready to assist you!", "Excited to chat with you!", "Happy to help!",
+        "Here to help!", "Always here for you!", "Let me know if you need anything!",
+    ]
+    for signoff in ai_signoffs:
+        text = text.replace(signoff, "").strip()
     already_has_closer = any(c in text for c in closers)
     if already_has_closer:
         return text
@@ -274,6 +281,8 @@ def lookup_faq(query: str) -> str | None:
             return None
 
         q = query.lower().strip()
+        if len(q) < 3:
+            return None
 
         # Exact or near-exact match first
         for faq in faqs:
