@@ -89,20 +89,24 @@ def apply_teddy_vibes(text: str) -> str:
         "Waiting for your next question! ✨",
         "Teddy out! 🐾"
     ]
-    # Strip any AI-generated sign-offs before checking/adding our own
-    ai_signoffs = [
-        "Ready to assist you!", "Excited to chat with you!", "Happy to help!",
-        "Here to help!", "Always here for you!", "Let me know if you need anything!",
-        "Paws and hugs, Teddy", "Teddy out!", "Stay cozy!", "Paws and hugs",
-        "Waiting for your next question!", "Feel free to ask",
-    ]
-    for signoff in ai_signoffs:
-        text = text.replace(signoff, "").strip()
-    already_has_closer = any(c in text for c in closers)
-    if already_has_closer:
-        return text
+    # Strip trailing lines that look like sign-offs
+    # Split into lines, remove any trailing line that ends with common closer patterns
+    import re as _re
+    lines = text.strip().split("\n")
+    closer_pattern = _re.compile(
+        "(paws|hugs|cozy|happy shopping|feel free|let me know|"
+        "here to help|always here|ready to|excited to|"
+        "stay cozy|waiting for|teddy out|snuggle)",
+        _re.IGNORECASE
+    )
+    # Remove trailing lines that are pure sign-offs
+    while lines and closer_pattern.search(lines[-1]) and len(lines[-1]) < 60:
+        lines.pop()
+    text = "\n".join(lines).strip()
+    if not text:
+        text = "I\'m here to help! What would you like to know?"
     if "price" in text.lower() or "cost" in text.lower():
-        text = "I've sniffed out the best value for you! " + text
+        text = "I\'ve sniffed out the best value for you! " + text
     return f"{text}\n\n*{closers[int(time.time()) % len(closers)]}*"
 
 def maybe_add_shop_cta(query: str, response: str) -> str:
