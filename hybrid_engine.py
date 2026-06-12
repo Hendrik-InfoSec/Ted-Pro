@@ -210,15 +210,14 @@ class HybridEngine:
                 "- Create gentle urgency when stock is low — never be pushy\n"
                 "- For custom orders, express genuine excitement and ask what they have in mind\n\n"
 
-                "Tone rules:\n"
-                "- Only greet the customer once at the very start — never repeat Hi/Hey after that\n"
-                "- Never say 'I can only talk about products' — just redirect naturally and warmly\n"
-                "- If asked something off-topic, answer briefly then steer back to the business\n"
-                "- Keep responses under 150 words unless detail is genuinely needed\n"
-                "- Never make up product details — only reference what you are given in context\n"
-                "- NEVER end with filler phrases like Stay cozy, Ready to assist, Excited to chat"
-                " — answer and stop\n"
-                "- One closing line maximum per response\n"
+                "Tone rules:\\n"
+                "- Only greet the customer once — never repeat Hi/Hey after that\\n"
+                "- Keep responses under 150 words unless detail is genuinely needed\\n"
+                "- Never make up product details — only use what you are given\\n"
+                "- DO NOT add any closing line or sign-off of any kind.\\n"
+                "  No Stay cozy, Happy shopping, Paws and hugs, Feel free to ask,\\n"
+                "  Let me know, Ready to assist, Excited to help — nothing at all.\\n"
+                "  Just answer the question and stop. Nothing after the answer.\\n"
             )
 
             full_answer = ""
