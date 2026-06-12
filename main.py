@@ -2307,7 +2307,7 @@ async def widget_chat(request: Request):
         if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
             ai = "".join(get_engine().stream_answer(prompt, chat_history=load_history(sid)))
             save_history_row(sid, prompt, ai)
-            return JSONResponse({"response": ai, "handoff": True})
+            return JSONResponse({"response": ai, "handoff": True, "whatsapp": "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%20help%20%F0%9F%A7%B8"})
 
         enhanced = prompt
         if any(kw in q_lower for kw in STOCK_KEYWORDS):
