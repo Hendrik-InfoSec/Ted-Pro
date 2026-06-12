@@ -205,7 +205,7 @@ def _safe_password(env_key: str) -> str:
 
 ADMIN_PASSWORD = _safe_password("ADMIN_PASSWORD")
 DEV_PASSWORD   = _safe_password("DEV_PASSWORD")
-CLIENT_ID      = os.environ.get("CLIENT_ID", CLIENT_ID)
+CLIENT_ID      = os.environ.get("CLIENT_ID", "tedpro_client")
 
 def _esc_html(s) -> str:
     """Escape HTML special chars so content can't break the page structure."""
