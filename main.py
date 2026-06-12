@@ -28,7 +28,9 @@ app = FastAPI(title="TedPro Assistant", version="2.1.0")
 app.state.limiter = limiter
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ.get("SECRET_KEY", "tedpro-fallback-secret")
+    secret_key=os.environ.get("SECRET_KEY", "tedpro-fallback-secret"),
+    same_site="none",
+    https_only=True,
 )
 
 # Static files served via route — no folder needed
@@ -2159,40 +2161,153 @@ async def embed_script():
                     headers={"Cache-Control": "public, max-age=3600"})
 
 
+
 @app.get("/chat-widget", response_class=HTMLResponse)
 async def chat_widget(request: Request):
-    """Compact widget page for iframe embedding."""
-    init_session(request)
-    session_id = request.session["session_id"]
-    history = load_history(session_id)
-    messages_html = "".join(
-        user_bubble(m["content"], m.get("time","")) if m["role"]=="user"
-        else bot_bubble(m["content"], m.get("time",""))
-        for m in history
-    )
-    if not messages_html:
-        messages_html = (
-            '<div style="text-align:center;padding:20px;color:#8B6914;font-size:13px">'
-            '&#128075; Hi! Ask me anything about CuddleHeros plushies!</div>'
+    """Cookieless widget — session via localStorage, works on every site/browser/security setting."""
+    sid = request.query_params.get("sid", "")
+    if not sid:
+        return HTMLResponse("""<!DOCTYPE html><html><head><meta charset="utf-8"><script>
+var s=localStorage.getItem('tpro_sid');
+if(!s){s='w'+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);localStorage.setItem('tpro_sid',s);}
+location.replace('/chat-widget?sid='+encodeURIComponent(s));
+</script></head><body></body></html>""")
+
+    try:
+        sb = _get_supabase()
+        rows = sb.table("conversations").select("user_message,bot_response") \
+            .eq("session_id", sid).eq("client_id", "tedpro_client") \
+            .order("created_at", desc=False).limit(50).execute().data or []
+    except Exception:
+        rows = []
+
+    history_html = ""
+    for r in rows:
+        u = _esc_html(r.get("user_message", ""))
+        b = _esc_html(r.get("bot_response", ""))
+        history_html += (
+            "<div style='display:flex;justify-content:flex-end;margin-bottom:8px'>"
+            "<div style='background:#FF922B;color:white;padding:10px 14px;"
+            "border-radius:16px 16px 4px 16px;max-width:78%;font-size:13px'>"
+            + u + "</div></div>"
+            "<div style='display:flex;justify-content:flex-start;margin-bottom:8px'>"
+            "<div style='background:white;border:1px solid #FFE4CC;padding:10px 14px;"
+            "border-radius:16px 16px 16px 4px;max-width:78%;font-size:13px;color:#2D1B00'>"
+            "&#129528; " + b + "</div></div>"
         )
-    scroll_js = "var m=document.getElementById('chat-messages');m.scrollTop=m.scrollHeight;"
-    content = (
-        '<div style="display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#FFF9F4">'
-        '<div style="background:linear-gradient(135deg,#FF922B,#FF8C42);color:white;'
-        'padding:12px 16px;text-align:center;flex-shrink:0">'
-        '<div style="font-size:22px">&#129528;</div>'
-        '<div style="font-weight:700;font-size:14px">Teddy</div>'
-        '<div style="font-size:11px;opacity:.85">Your CuddleHeros Assistant</div></div>'
-        '<div id="chat-messages" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px">'
-        + messages_html +
-        '</div>'
-        '<div style="padding:10px;background:#FFF9F4;border-top:1px solid #FFE4CC;flex-shrink:0">'
-        f'<form id="chat-form" hx-post="/chat" hx-target="#chat-messages" hx-swap="beforeend" '
-        f'hx-on::after-request="this.reset();{scroll_js}" '
-        'style="display:flex;gap:8px">'
-        '<input type="text" name="prompt" placeholder="Ask Teddy..." required autocomplete="off" '
-        'style="flex:1;padding:10px 14px;border-radius:20px;border:1.5px solid #FFD5A5;background:white;font-size:13px;outline:none;font-family:inherit">'
-        '<button type="submit" style="padding:10px 18px;border-radius:20px;background:#FF922B;color:white;border:none;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">Send</button>'
-        '</form></div></div>'
+
+    if not history_html:
+        history_html = (
+            "<div style='text-align:center;padding:20px;color:#8B6914;font-size:13px'>"
+            "&#128075; Hi! Ask me anything about CuddleHeros plushies!</div>"
+        )
+
+    sid_js = sid.replace("'", "\\'")
+
+    page = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<link href='https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap' rel='stylesheet'>"
+        "<script src='https://cdn.jsdelivr.net/npm/marked/marked.min.js'></script>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font-family:'Quicksand',sans-serif;background:#FFF9F4;height:100vh;display:flex;flex-direction:column;overflow:hidden}"
+        "#msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:2px}"
+        "#footer{padding:10px;background:#FFF9F4;border-top:1px solid #FFE4CC;flex-shrink:0}"
+        "#row{display:flex;gap:8px}"
+        "#inp{flex:1;padding:10px 14px;border-radius:20px;border:1.5px solid #FFD5A5;background:white;font-size:13px;outline:none;font-family:inherit}"
+        "#btn{padding:10px 18px;border-radius:20px;background:#FF922B;color:white;border:none;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit}"
+        "#btn:disabled{opacity:.6;cursor:default}"
+        "</style></head><body>"
+        "<div style='background:linear-gradient(135deg,#FF922B,#FF8C42);color:white;padding:12px 16px;text-align:center;flex-shrink:0'>"
+        "<div style='font-size:20px'>&#129528;</div>"
+        "<div style='font-weight:700;font-size:14px'>Teddy</div>"
+        "<div style='font-size:11px;opacity:.85'>Your CuddleHeros Assistant</div></div>"
+        "<div id='msgs'>" + history_html + "</div>"
+        "<div id='footer'><div id='row'>"
+        "<input id='inp' type='text' placeholder='Ask Teddy...' autocomplete='off'>"
+        "<button id='btn' onclick='send()'>Send</button>"
+        "</div></div>"
+        "<script>"
+        "var SID='" + sid_js + "';"
+        "function scroll(){var m=document.getElementById('msgs');m.scrollTop=m.scrollHeight;}"
+        "scroll();"
+        "function send(){"
+        "  var inp=document.getElementById('inp');"
+        "  var btn=document.getElementById('btn');"
+        "  var txt=inp.value.trim();if(!txt)return;"
+        "  inp.value='';btn.disabled=true;"
+        "  var msgs=document.getElementById('msgs');"
+        "  var ub=document.createElement('div');"
+        "  ub.style.cssText='display:flex;justify-content:flex-end;margin-bottom:8px';"
+        "  ub.innerHTML='<div style=\"background:#FF922B;color:white;padding:10px 14px;border-radius:16px 16px 4px 16px;max-width:78%;font-size:13px\">'+txt+'</div>';"
+        "  msgs.appendChild(ub);scroll();"
+        "  var tb=document.createElement('div');"
+        "  tb.style.cssText='display:flex;justify-content:flex-start;margin-bottom:8px';"
+        "  tb.innerHTML='<div style=\"background:white;border:1px solid #FFE4CC;padding:10px 14px;border-radius:16px 16px 16px 4px;max-width:78%;font-size:13px;color:#2D1B00\">&#129528; ...</div>';"
+        "  msgs.appendChild(tb);scroll();"
+        "  fetch('/widget-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:txt,sid:SID})})"
+        "  .then(function(r){return r.json();})"
+        "  .then(function(d){"
+        "    var inner=tb.querySelector('div');"
+        "    inner.innerHTML='&#129528; '+(window.marked?marked.parse(d.response):d.response);"
+        "    btn.disabled=false;scroll();"
+        "  })"
+        "  .catch(function(){"
+        "    tb.querySelector('div').textContent='&#129528; Connection issue, try again!';"
+        "    btn.disabled=false;"
+        "  });"
+        "}"
+        "document.getElementById('inp').onkeydown=function(e){if(e.key==='Enter')send();};"
+        "</script></body></html>"
     )
-    return HTMLResponse(content=render_page("Teddy", content))
+    return HTMLResponse(content=page)
+
+
+@app.post("/widget-chat")
+async def widget_chat(request: Request):
+    """Cookieless JSON chat endpoint for the embed widget."""
+    try:
+        body = await request.json()
+        prompt = str(body.get("prompt", "")).strip()
+        sid = str(body.get("sid", "")).strip()
+        if not prompt or not sid:
+            return JSONResponse({"response": "Something went wrong. Try again!"})
+
+        q_lower = prompt.lower()
+
+        faq_answer = lookup_faq(prompt)
+        if faq_answer:
+            final = apply_teddy_vibes(faq_answer)
+            save_history_row(sid, prompt, final)
+            return JSONResponse({"response": final})
+
+        if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
+            ai = "".join(get_engine().stream_answer(prompt, chat_history=load_history(sid)))
+            final = apply_teddy_vibes(ai)
+            save_history_row(sid, prompt, final)
+            return JSONResponse({"response": final, "handoff": True})
+
+        enhanced = prompt
+        if any(kw in q_lower for kw in STOCK_KEYWORDS):
+            info = lookup_stock(prompt)
+            if info:
+                enhanced = prompt + "\n\n[LIVE STOCK DATA]\n" + info
+        elif any(kw in q_lower for kw in PRODUCT_KEYWORDS):
+            try:
+                products = get_engine().search_products(prompt, max_results=5)
+                if products:
+                    enhanced = prompt + "\n\n[PRODUCT INFO]\n" + get_engine().format_product_response(products)
+            except Exception:
+                pass
+
+        history = load_history(sid)
+        history.append({"role": "user", "content": prompt})
+        full = "".join(get_engine().stream_answer(enhanced, chat_history=history))
+        full = maybe_add_shop_cta(prompt, full)
+        final = apply_teddy_vibes(full)
+        save_history_row(sid, prompt, final)
+        return JSONResponse({"response": final})
+    except Exception as e:
+        logger.error(f"widget_chat error: {e}")
+        return JSONResponse({"response": "I'm having a moment! Try again. \U0001f9f8"})
