@@ -2285,6 +2285,10 @@ async def widget_chat(request: Request):
 
         q_lower = prompt.lower()
 
+        # Gibberish filter — same as main chat
+        if _is_gibberish(prompt):
+            return JSONResponse({"response": "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, shipping, or custom orders. 🧸"})
+
         faq_answer = lookup_faq(prompt)
         if faq_answer:
             save_history_row(sid, prompt, faq_answer)
