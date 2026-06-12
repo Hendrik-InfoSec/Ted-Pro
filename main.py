@@ -2287,15 +2287,13 @@ async def widget_chat(request: Request):
 
         faq_answer = lookup_faq(prompt)
         if faq_answer:
-            final = apply_teddy_vibes(faq_answer)
-            save_history_row(sid, prompt, final)
-            return JSONResponse({"response": final})
+            save_history_row(sid, prompt, faq_answer)
+            return JSONResponse({"response": faq_answer})
 
         if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
             ai = "".join(get_engine().stream_answer(prompt, chat_history=load_history(sid)))
-            final = apply_teddy_vibes(ai)
-            save_history_row(sid, prompt, final)
-            return JSONResponse({"response": final, "handoff": True})
+            save_history_row(sid, prompt, ai)
+            return JSONResponse({"response": ai, "handoff": True})
 
         enhanced = prompt
         if any(kw in q_lower for kw in STOCK_KEYWORDS):
@@ -2314,9 +2312,8 @@ async def widget_chat(request: Request):
         history.append({"role": "user", "content": prompt})
         full = "".join(get_engine().stream_answer(enhanced, chat_history=history))
         full = maybe_add_shop_cta(prompt, full)
-        final = apply_teddy_vibes(full)
-        save_history_row(sid, prompt, final)
-        return JSONResponse({"response": final})
+        save_history_row(sid, prompt, full)
+        return JSONResponse({"response": full})
     except Exception as e:
         logger.error(f"widget_chat error: {e}")
         return JSONResponse({"response": "I'm having a moment! Try again. \U0001f9f8"})
