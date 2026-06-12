@@ -50,7 +50,7 @@ def get_engine():
         missing = [k for k, v in {"OPENROUTER_API_KEY": api_key, "SUPABASE_URL": sb_url, "SUPABASE_KEY": sb_key}.items() if not v]
         if missing:
             raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
-        _engine = HybridEngine(api_key=api_key, supabase_url=sb_url, supabase_key=sb_key, client_id="tedpro_client")
+        _engine = HybridEngine(api_key=api_key, supabase_url=sb_url, supabase_key=sb_key, client_id=CLIENT_ID)
     return _engine
 
 # ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ def load_history(session_id: str) -> list:
             sb.table("conversations")
             .select("user_message, bot_response, created_at")
             .eq("session_id", session_id)
-            .eq("client_id", "tedpro_client")
+            .eq("client_id", CLIENT_ID)
             .order("created_at", desc=False)
             .limit(50)
             .execute()
@@ -185,7 +185,7 @@ def save_history_row(session_id: str, user_msg: str, bot_msg: str):
             "user_message": user_msg,
             "bot_response": bot_msg[:2000],
             "created_at":   datetime.now().isoformat(),
-            "client_id":    "tedpro_client",
+            "client_id":    CLIENT_ID,
         }).execute()
     except Exception as e:
         logger.error(f"save_history_row error: {e}")
@@ -205,6 +205,7 @@ def _safe_password(env_key: str) -> str:
 
 ADMIN_PASSWORD = _safe_password("ADMIN_PASSWORD")
 DEV_PASSWORD   = _safe_password("DEV_PASSWORD")
+CLIENT_ID      = os.environ.get("CLIENT_ID", CLIENT_ID)
 
 def _esc_html(s) -> str:
     """Escape HTML special chars so content can't break the page structure."""
@@ -230,7 +231,7 @@ def lookup_stock(query: str) -> str | None:
         sb = _get_supabase()
         all_products = sb.table("products").select(
             "name, in_stock, stock_quantity, price, currency, category, size_cm, material, sku"
-        ).eq("client_id", "tedpro_client").execute().data or []
+        ).eq("client_id", CLIENT_ID).execute().data or []
 
         q = query.lower()
         matches = [
@@ -276,7 +277,7 @@ def lookup_faq(query: str) -> str | None:
     """
     try:
         sb = _get_supabase()
-        faqs = sb.table("faqs").select("question, answer").eq("client_id", "tedpro_client").eq("active", True).execute().data or []
+        faqs = sb.table("faqs").select("question, answer").eq("client_id", CLIENT_ID).eq("active", True).execute().data or []
         if not faqs:
             return None
 
@@ -848,7 +849,7 @@ async def serve_admin_js():
 def _build_faq_panel() -> str:
     try:
         sb = _get_supabase()
-        faqs = sb.table("faqs").select("*").eq("client_id", "tedpro_client")             .order("category").order("created_at").execute().data or []
+        faqs = sb.table("faqs").select("*").eq("client_id", CLIENT_ID)             .order("category").order("created_at").execute().data or []
     except Exception as e:
         logger.error(f"FAQ fetch error: {e}")
         faqs = []
@@ -1081,12 +1082,12 @@ async def bulk_upload_faqs(request: Request, faq_file: str = Form(...)):
             if not q or not a:
                 skipped += 1
                 continue
-            existing = sb.table("faqs").select("id").eq("client_id", "tedpro_client").eq("question", q).execute().data
+            existing = sb.table("faqs").select("id").eq("client_id", CLIENT_ID).eq("question", q).execute().data
             if existing:
                 skipped += 1
                 continue
             sb.table("faqs").insert({
-                "client_id": "tedpro_client",
+                "client_id": CLIENT_ID,
                 "question":  q,
                 "answer":    a,
                 "category":  cat,
@@ -1112,7 +1113,7 @@ async def add_faq(request: Request, question: str = Form(...), answer: str = For
     try:
         sb = _get_supabase()
         result = sb.table("faqs").insert({
-            "client_id": "tedpro_client",
+            "client_id": CLIENT_ID,
             "question":  question.strip(),
             "answer":    answer.strip(),
             "category":  category.strip() or "General",
@@ -1536,7 +1537,7 @@ async def clear_chat(request: Request):
     if session_id:
         try:
             sb = _get_supabase()
-            sb.table("conversations").delete().eq("session_id", session_id).eq("client_id", "tedpro_client").execute()
+            sb.table("conversations").delete().eq("session_id", session_id).eq("client_id", CLIENT_ID).execute()
         except Exception as e:
             logger.error(f"Clear chat Supabase error: {e}")
     _response_store.pop(session_id, None)
@@ -1670,7 +1671,7 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
                 stock_quantity = 0
 
             products.append({
-                "client_id":      "tedpro_client",
+                "client_id":      CLIENT_ID,
                 "name":           sv(r.get("name")),
                 "category":       sv(r.get("category")),
                 "price":          price,
@@ -1685,7 +1686,7 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
             })
 
         # Fetch existing IDs first — insert new, then delete old safely
-        existing = sb.table("products").select("id").eq("client_id", "tedpro_client").execute().data or []
+        existing = sb.table("products").select("id").eq("client_id", CLIENT_ID).execute().data or []
         existing_ids = [row["id"] for row in existing]
         sb.table("products").insert(products).execute()
         if existing_ids:
@@ -1731,7 +1732,7 @@ async def conversations_rows(request: Request):
         return HTMLResponse("Not authenticated", status_code=401)
     try:
         sb = _get_supabase()
-        convs = sb.table("conversations").select("*").eq("client_id", "tedpro_client").order("created_at", desc=True).limit(50).execute().data or []
+        convs = sb.table("conversations").select("*").eq("client_id", CLIENT_ID).order("created_at", desc=True).limit(50).execute().data or []
         if not convs:
             return HTMLResponse('<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">No conversations yet</td></tr>')
         parts = []
@@ -1762,7 +1763,7 @@ async def admin_data(request: Request):
         sb = _get_supabase()
         E = _esc_html
         leads = sb.table("leads").select("*").order("timestamp", desc=True).limit(100).execute().data or []
-        convs = sb.table("conversations").select("*").eq("client_id", "tedpro_client").order("created_at", desc=True).limit(100).execute().data or []
+        convs = sb.table("conversations").select("*").eq("client_id", CLIENT_ID).order("created_at", desc=True).limit(100).execute().data or []
 
         h = ["<!DOCTYPE html><html><head><meta charset='utf-8'><title>TedPro Data</title>",
              "<style>body{font-family:sans-serif;background:#FFF9F4;color:#2D1B00;padding:24px}",
@@ -1799,7 +1800,7 @@ async def view_conversation(request: Request, session_id: str):
         return HTMLResponse("Not authenticated", status_code=401)
     try:
         sb = _get_supabase()
-        rows = sb.table("conversations").select("user_message,bot_response,created_at")             .eq("session_id", session_id).eq("client_id", "tedpro_client")             .order("created_at", desc=False).limit(100).execute().data or []
+        rows = sb.table("conversations").select("user_message,bot_response,created_at")             .eq("session_id", session_id).eq("client_id", CLIENT_ID)             .order("created_at", desc=False).limit(100).execute().data or []
         E = _esc_html
         bubbles = []
         for r in rows:
@@ -1863,7 +1864,7 @@ async def export_conversations(request: Request):
         import io, csv as csv_mod
         from fastapi.responses import Response
         sb = _get_supabase()
-        rows = sb.table("conversations").select("*").eq("client_id", "tedpro_client")             .order("created_at", desc=True).execute().data or []
+        rows = sb.table("conversations").select("*").eq("client_id", CLIENT_ID)             .order("created_at", desc=True).execute().data or []
         output = io.StringIO()
         writer = csv_mod.writer(output)
         writer.writerow(["date", "session_id", "user_message", "bot_response"])
@@ -1914,12 +1915,12 @@ async def _admin_dashboard(request: Request):
         sb = _get_supabase()
 
         leads_data    = sb.table("leads").select("*").order("timestamp", desc=True).limit(50).execute().data or []
-        convs_data    = sb.table("conversations").select("*").eq("client_id", "tedpro_client").order("created_at", desc=True).limit(50).execute().data or []
+        convs_data    = sb.table("conversations").select("*").eq("client_id", CLIENT_ID).order("created_at", desc=True).limit(50).execute().data or []
         products_data = sb.table("products").select("*").order("name").execute().data or []
         leads_count    = len(sb.table("leads").select("id").execute().data or [])
         conv_count     = len(sb.table("conversations").select("id").execute().data or [])
         products_count = len(sb.table("products").select("id").execute().data or [])
-        faqs_count     = len(sb.table("faqs").select("id").eq("client_id", "tedpro_client").execute().data or [])
+        faqs_count     = len(sb.table("faqs").select("id").eq("client_id", CLIENT_ID).execute().data or [])
         today          = datetime.now().date().isoformat()
         today_leads    = len(sb.table("leads").select("id").gte("timestamp", today).execute().data or [])
 
@@ -2104,6 +2105,11 @@ async def _dev_dashboard(request: Request):
         "ADMIN_PASSWORD":     os.environ.get("ADMIN_PASSWORD"),
         "DEV_PASSWORD":       os.environ.get("DEV_PASSWORD"),
         "SECRET_KEY":         os.environ.get("SECRET_KEY"),
+        "CLIENT_ID":          os.environ.get("CLIENT_ID"),
+        "BUSINESS_NAME":      os.environ.get("BUSINESS_NAME"),
+        "BUSINESS_TYPE":      os.environ.get("BUSINESS_TYPE"),
+        "SHOP_URL":           os.environ.get("SHOP_URL"),
+        "VOUCHER_CODE":       os.environ.get("VOUCHER_CODE"),
     }
     rows = "".join(
         f'<tr class="border-b border-[#FFE4CC]">'
@@ -2185,7 +2191,7 @@ location.replace('/chat-widget?sid='+encodeURIComponent(s));
     try:
         sb = _get_supabase()
         rows = sb.table("conversations").select("user_message,bot_response") \
-            .eq("session_id", sid).eq("client_id", "tedpro_client") \
+            .eq("session_id", sid).eq("client_id", CLIENT_ID) \
             .order("created_at", desc=False).limit(50).execute().data or []
     except Exception:
         rows = []
