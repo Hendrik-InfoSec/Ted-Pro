@@ -93,6 +93,8 @@ def apply_teddy_vibes(text: str) -> str:
     ai_signoffs = [
         "Ready to assist you!", "Excited to chat with you!", "Happy to help!",
         "Here to help!", "Always here for you!", "Let me know if you need anything!",
+        "Paws and hugs, Teddy", "Teddy out!", "Stay cozy!", "Paws and hugs",
+        "Waiting for your next question!", "Feel free to ask",
     ]
     for signoff in ai_signoffs:
         text = text.replace(signoff, "").strip()
@@ -1338,16 +1340,22 @@ async def chat_page(request: Request):
 import re as _re
 
 def _is_gibberish(text: str) -> bool:
-    t = text.strip()
+    t = text.strip().lower()
     if len(t) < 2:
         return True
     if not any(c.isalpha() for c in t):
         return True
-    letters = [c.lower() for c in t if c.isalpha()]
+    letters = [c for c in t if c.isalpha()]
     if len(set(letters)) == 1 and len(t) <= 4:
         return True
     vowels = set("aeiouyw")
     if len(letters) >= 5 and not any(v in letters for v in vowels):
+        return True
+    # Short words with no real question intent
+    noise_words = {"ekse", "ey", "yo", "yoh", "eish", "lol", "haha",
+                   "hmm", "hm", "ok", "okay", "k", "kk", "sup", "heita",
+                   "aweh", "sharp", "sho", "yebo", "nah", "ja", "neh"}
+    if t in noise_words:
         return True
     return False
 
