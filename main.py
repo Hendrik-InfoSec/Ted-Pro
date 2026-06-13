@@ -1497,7 +1497,6 @@ async def chat_response(request: Request):
         history_for_context.append({"role": "user", "content": query})
 
         full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
-        full_response = maybe_add_shop_cta(query, full_response)
         full_response = _strip_urls(full_response)
         final = apply_teddy_vibes(full_response)
         t     = get_teddy_time()
@@ -2400,7 +2399,6 @@ async def widget_chat(request: Request):
         history = load_history(sid)
         history.append({"role": "user", "content": prompt})
         full = "".join(get_engine().stream_answer(enhanced, chat_history=history))
-        full = maybe_add_shop_cta(prompt, full)
         save_history_row(sid, prompt, full)
         resp = {"response": full}
         if show_lead:
