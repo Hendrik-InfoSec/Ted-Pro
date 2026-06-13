@@ -77,9 +77,9 @@ HANDOFF_KEYWORDS = [
 BUY_KEYWORDS = [
     "how do i order", "how to order", "want to buy", "want to order",
     "how to buy", "where can i buy", "where do i buy", "place an order",
-    "how do i get", "i want one", "i want that", "i want the",
-    "can i get", "can i order", "ready to order", "how do i purchase",
-    "purchase", "checkout", "buy now", "order now", "i'll take",
+    "how do i purchase", "ready to order", "i'll take",
+    "purchase", "checkout", "buy now", "order now",
+    "add to cart", "how do i pay", "how to pay",
 ]
 
 def apply_teddy_vibes(text: str) -> str:
@@ -1444,8 +1444,15 @@ async def chat_response(request: Request):
                 store["processing"] = False
                 return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble())
 
-        # ── 1. FAQ lookup — check faqs table first, no AI needed ──────────
-        faq_answer = lookup_faq(query)
+        # ── 1. FAQ lookup — skip if complaint/context-dependent ───────────
+        _SUPPORT = [
+            "not working", "doesn't work", "cant", "can't", "wont", "won't",
+            "error", "problem", "issue", "broken", "failed", "wrong",
+            "didn't", "didnt", "still ", "again", "already", " it ",
+            "that ", "this ", "the one", "my order",
+        ]
+        _skip_faq = any(s in q_lower for s in _SUPPORT)
+        faq_answer = None if _skip_faq else lookup_faq(query)
         if faq_answer:
             final  = apply_teddy_vibes(faq_answer)
             t      = get_teddy_time()
@@ -2309,7 +2316,14 @@ async def widget_chat(request: Request):
         if _is_gibberish(prompt):
             return JSONResponse({"response": "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, shipping, or custom orders. 🧸"})
 
-        faq_answer = lookup_faq(prompt)
+        SUPPORT_SIGNALS = [
+            "not working", "doesn't work", "cant", "can't", "wont", "won't",
+            "error", "problem", "issue", "broken", "failed", "wrong",
+            "didn't", "didnt", "still ", "again", "already", " it ",
+            "that ", "this ", "the one", "my order",
+        ]
+        _skip_faq = any(sig in q_lower for sig in SUPPORT_SIGNALS)
+        faq_answer = None if _skip_faq else lookup_faq(prompt)
         if faq_answer:
             save_history_row(sid, prompt, faq_answer)
             return JSONResponse({"response": faq_answer})
