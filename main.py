@@ -1478,11 +1478,15 @@ async def chat_response(request: Request):
         # ── 3. Product context for general product queries ────────────────
         elif any(kw in q_lower for kw in PRODUCT_KEYWORDS):
             try:
-                products = get_engine().search_products(query, max_results=5)
+                _sq = query if len(query.split()) > 3 else (
+                    " ".join([m.get("content","") for m in chat_history[-3:]]) + " " + query
+                    if chat_history else query
+                )
+                products = get_engine().search_products(_sq, max_results=5)
                 if products:
                     enhanced_query = (
                         query
-                        + "\n\n[PRODUCT INFO]\n"
+                        + "\n\n[PRODUCT INFO — use these exact prices and details]\n"
                         + get_engine().format_product_response(products)
                         + f"\n\n[SHOP LINK] If the customer wants to order, direct them to: {SHOP_URL}"
                     )
@@ -2373,11 +2377,23 @@ async def widget_chat(request: Request):
             info = lookup_stock(prompt)
             if info:
                 enhanced = prompt + "\n\n[LIVE STOCK DATA]\n" + info
-        elif any(kw in q_lower for kw in PRODUCT_KEYWORDS):
+        elif any(kw in q_lower for kw in PRODUCT_KEYWORDS) or any(
+            kw in q_lower for kw in ["rainbow","giant","mini","snuggle","gentle","soft","small","large","big"]
+        ):
             try:
-                products = get_engine().search_products(prompt, max_results=5)
+                # Search using full conversation context if current message is short
+                search_query = prompt
+                if len(prompt.split()) <= 3 and history:
+                    recent = " ".join([m.get("content","") for m in history[-3:]])
+                    search_query = recent + " " + prompt
+                products = get_engine().search_products(search_query, max_results=5)
                 if products:
-                    enhanced = prompt + "\n\n[PRODUCT INFO]\n" + get_engine().format_product_response(products)
+                    enhanced = (
+                        prompt +
+                        "\n\n[PRODUCT INFO — use these exact prices and details in your response]\n" +
+                        get_engine().format_product_response(products) +
+                        "\n[END PRODUCT INFO — do not invent prices or details not listed above]"
+                    )
             except Exception:
                 pass
 
