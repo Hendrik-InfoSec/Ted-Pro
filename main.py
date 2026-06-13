@@ -67,6 +67,7 @@ WHATSAPP_URL  = "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%2
 # Triggers that suggest customer needs human help
 HANDOFF_KEYWORDS = [
     "speak to someone", "talk to someone", "real person", "human",
+    "want a human", "want to speak", "want to talk", "get a human",
     "speak to a person", "contact you", "call you", "whatsapp",
     "not sure", "complicated", "complex", "confused",
     "custom order", "bulk order", "corporate", "wedding", "event",
@@ -2295,6 +2296,20 @@ location.replace('/chat-widget?sid='+encodeURIComponent(s));
         "  });"
         "}"
         "document.getElementById('inp').onkeydown=function(e){if(e.key==='Enter')send();};"
+        "function submitWidgetLead(){"
+        "  var name=document.getElementById('wl-name').value.trim();"
+        "  var email=document.getElementById('wl-email').value.trim();"
+        "  var msg=document.getElementById('wl-msg');"
+        "  if(!email||email.indexOf('@')<0){msg.textContent='Please enter a valid email.';return;}"
+        "  fetch('/widget-lead',{method:'POST',"
+        "    headers:{'Content-Type':'application/json'},"
+        "    body:JSON.stringify({name:name,email:email,sid:SID})})"
+        "  .then(function(r){return r.json();})"
+        "  .then(function(d){"
+        "    var lf=document.getElementById('widget-lead-form');"
+        "    if(lf)lf.innerHTML='<p style=color:#166534;font-weight:700;font-size:13px;text-align:center>&#9989; You are in! Check your inbox for TEDDY10.</p>';"
+        "  }).catch(function(){msg.textContent='Something went wrong.';});"
+        "}"
         "</script></body></html>"
     )
     return HTMLResponse(content=page)
@@ -2333,6 +2348,23 @@ async def widget_chat(request: Request):
             save_history_row(sid, prompt, ai)
             return JSONResponse({"response": ai, "handoff": True, "whatsapp": "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%20help%20%F0%9F%A7%B8"})
 
+        # Lead capture check
+        LEAD_INTENT = [
+            "price","cost","how much","order","buy","purchase",
+            "ship","deliver","custom","gift","birthday",
+            "available","stock","checkout","add to cart",
+        ]
+        history = load_history(sid)
+        has_intent = any(kw in q_lower for kw in LEAD_INTENT)
+        msg_count = len(history)
+        try:
+            sb = _get_supabase()
+            existing_lead = sb.table("leads").select("id").eq("context", f"widget_{sid}").execute().data
+            lead_captured = bool(existing_lead)
+        except Exception:
+            lead_captured = False
+        show_lead = not lead_captured and (has_intent or msg_count >= 8)
+
         enhanced = prompt
         if any(kw in q_lower for kw in STOCK_KEYWORDS):
             info = lookup_stock(prompt)
@@ -2351,7 +2383,29 @@ async def widget_chat(request: Request):
         full = "".join(get_engine().stream_answer(enhanced, chat_history=history))
         full = maybe_add_shop_cta(prompt, full)
         save_history_row(sid, prompt, full)
-        return JSONResponse({"response": full})
+        resp = {"response": full}
+        if show_lead:
+            resp["show_lead"] = True
+        return JSONResponse(resp)
     except Exception as e:
         logger.error(f"widget_chat error: {e}")
         return JSONResponse({"response": "I'm having a moment! Try again. \U0001f9f8"})
+
+
+@app.post("/widget-lead")
+async def widget_lead(request: Request):
+    """Capture lead from the embed widget."""
+    try:
+        body = await request.json()
+        name  = str(body.get("name", "")).strip()
+        email = str(body.get("email", "")).strip()
+        sid   = str(body.get("sid", "")).strip()
+        if not email or "@" not in email:
+            return JSONResponse({"ok": False, "error": "Invalid email"})
+        saved = get_engine().add_lead(name, email, context=f"widget_{sid}")
+        if saved:
+            send_welcome_email(name, email)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error(f"widget_lead error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)})
