@@ -1483,22 +1483,40 @@ async def chat_response(request: Request):
                 )
 
         # ── 3. Product context for general product queries ────────────────
-        elif any(kw in q_lower for kw in PRODUCT_KEYWORDS):
+        elif any(kw in q_lower for kw in PRODUCT_KEYWORDS) or any(
+            kw in q_lower for kw in ["rainbow","giant","mini","snuggle","gentle","large","soft"]
+        ):
             try:
-                _sq = query if len(query.split()) > 3 else (
-                    " ".join([m.get("content","") for m in chat_history[-3:]]) + " " + query
-                    if chat_history else query
-                )
-                products = get_engine().search_products(_sq, max_results=5)
-                if products:
+                sb_p = _get_supabase()
+                all_prods = sb_p.table("products").select(
+                    "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
+                ).eq("client_id", CLIENT_ID).execute().data or []
+                terms = set(w.lower() for w in query.split() if len(w) > 2)
+                for m in reversed((chat_history or [])[-3:]):
+                    if m.get("role") == "user":
+                        for w in m.get("content","").split():
+                            if len(w) > 2: terms.add(w.lower())
+                        break
+                matched = [p for p in all_prods if any(
+                    t in p.get("name","").lower() or t in p.get("category","").lower() for t in terms
+                )]
+                if not matched: matched = all_prods
+                if matched:
+                    lines = []
+                    for p in matched[:5]:
+                        stk = "In stock" if p.get("in_stock") else "Out of stock"
+                        lines.append(
+                            f"{p['name']} | ZAR {p.get('price',0):.2f} | {stk} | "
+                            f"Size: {p.get('size_cm','?')}cm | {p.get('material','')}"
+                        )
                     enhanced_query = (
                         query
-                        + "\n\n[PRODUCT INFO — use these exact prices and details]\n"
-                        + get_engine().format_product_response(products)
-                        + f"\n\n[SHOP LINK] If the customer wants to order, direct them to: {SHOP_URL}"
+                        + "\n\n[PRODUCT INFO — use ONLY these exact prices, do not invent details]\n"
+                        + "\n".join(lines)
+                        + "\n[END PRODUCT INFO]"
                     )
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.error(f"Product lookup error: {_e}")
 
         history_for_context = load_history(session_id)
         history_for_context.append({"role": "user", "content": query})
