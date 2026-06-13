@@ -83,31 +83,23 @@ BUY_KEYWORDS = [
 ]
 
 def apply_teddy_vibes(text: str) -> str:
-    closers = [
-        "Paws and hugs, Teddy 🧸",
-        "Stay cozy! 🍯",
-        "Waiting for your next question! ✨",
-        "Teddy out! 🐾"
-    ]
-    # Strip trailing lines that look like sign-offs
-    # Split into lines, remove any trailing line that ends with common closer patterns
+    """Strip AI-generated closers and return clean response. No sign-offs added."""
     import re as _re
     lines = text.strip().split("\n")
+    # Remove trailing lines that are sign-offs or filler
     closer_pattern = _re.compile(
-        "(paws|hugs|cozy|happy shopping|feel free|let me know|"
-        "here to help|always here|ready to|excited to|"
-        "stay cozy|waiting for|teddy out|snuggle)",
+        r"(paws|hugs|cozy|happy.shop|feel free|let me know|"
+        r"here to help|always here|ready to|excited to|"
+        r"stay cozy|waiting for|teddy out|snuggle|"
+        r"don.t hesitate|any other|anything else|hope that help)",
         _re.IGNORECASE
     )
-    # Remove trailing lines that are pure sign-offs
-    while lines and closer_pattern.search(lines[-1]) and len(lines[-1]) < 60:
+    while lines and closer_pattern.search(lines[-1]) and len(lines[-1]) < 80:
         lines.pop()
     text = "\n".join(lines).strip()
     if not text:
-        text = "I\'m here to help! What would you like to know?"
-    if "price" in text.lower() or "cost" in text.lower():
-        text = "I\'ve sniffed out the best value for you! " + text
-    return f"{text}\n\n*{closers[int(time.time()) % len(closers)]}*"
+        text = "Let me know what you need."
+    return text
 
 def maybe_add_shop_cta(query: str, response: str) -> str:
     """Append a shop CTA if the customer is showing buying intent."""
