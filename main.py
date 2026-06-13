@@ -1494,6 +1494,7 @@ async def chat_response(request: Request):
 
         full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
         full_response = maybe_add_shop_cta(query, full_response)
+        full_response = _strip_urls(full_response)
         final = apply_teddy_vibes(full_response)
         t     = get_teddy_time()
 
@@ -2278,7 +2279,8 @@ location.replace('/chat-widget?sid='+encodeURIComponent(s));
         "  .then(function(d){"
         "    var inner=tb.querySelector('div');"
         "    inner.innerHTML='&#129528; '+(window.marked?marked.parse(d.response):d.response);"
-        "    if(d.handoff&&d.whatsapp){"
+        "    if(d.handoff&&d.whatsapp&&!window._tedHandoffShown){"
+        "      window._tedHandoffShown=true;"
         "      var wb=document.createElement('div');"
         "      wb.style.cssText='display:flex;justify-content:flex-start;margin-bottom:8px';"
         "      var wa=document.createElement('div');"
@@ -2344,9 +2346,10 @@ async def widget_chat(request: Request):
             return JSONResponse({"response": faq_answer})
 
         if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
-            ai = "".join(get_engine().stream_answer(prompt, chat_history=load_history(sid)))
-            save_history_row(sid, prompt, ai)
-            return JSONResponse({"response": ai, "handoff": True, "whatsapp": "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%20help%20%F0%9F%A7%B8"})
+            handoff_msg = "I'll connect you with our team right away!"
+            save_history_row(sid, prompt, handoff_msg)
+            return JSONResponse({"response": handoff_msg, "handoff": True,
+                                 "whatsapp": "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%20help%20%F0%9F%A7%B8"})
 
         # Lead capture check
         LEAD_INTENT = [
