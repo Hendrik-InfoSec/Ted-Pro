@@ -126,13 +126,26 @@ class HybridEngine:
 
     def search_products(self, query: str, max_results: int = 5) -> list:
         try:
-            query = query.lower().strip()
+            q = query.lower().strip()[:40]
+            # Try exact phrase first
             results = self.supabase.table('products').select('*').eq(
                 'client_id', self.client_id
             ).or_(
-                f"name.ilike.%{query}%,category.ilike.%{query}%,description.ilike.%{query}%"
-            ).eq('in_stock', True).limit(max_results).execute()
-            return results.data if results.data else []
+                f"name.ilike.%{q}%,category.ilike.%{q}%,description.ilike.%{q}%"
+            ).limit(max_results).execute()
+            if results.data:
+                return results.data
+            # Fall back to individual keywords
+            words = [w for w in q.split() if len(w) > 3]
+            for word in words:
+                r = self.supabase.table('products').select('*').eq(
+                    'client_id', self.client_id
+                ).or_(
+                    f"name.ilike.%{word}%,category.ilike.%{word}%"
+                ).limit(max_results).execute()
+                if r.data:
+                    return r.data
+            return []
         except Exception as e:
             self.logger.error(f"Product search error: {e}")
             return []
