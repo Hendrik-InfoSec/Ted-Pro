@@ -83,6 +83,13 @@ BUY_KEYWORDS = [
     "add to cart", "how do i pay", "how to pay",
 ]
 
+def _strip_urls(text: str) -> str:
+    import re as _re2
+    text = _re2.sub(r"\[([^\]]+)\]\(https?://[^\)]+\)", r"\1", text)
+    text = _re2.sub(r"https?://\S+", "", text)
+    return text.strip()
+
+
 def apply_teddy_vibes(text: str) -> str:
     """Strip AI-generated closers and return clean response. No sign-offs added."""
     import re as _re
@@ -2330,75 +2337,100 @@ async def widget_chat(request: Request):
         if not prompt or not sid:
             return JSONResponse({"response": "Something went wrong. Try again!"})
 
+        if _is_gibberish(prompt):
+            return JSONResponse({"response": "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, shipping, or custom orders. \U0001f9f8"})
+
         q_lower = prompt.lower()
 
-        # Gibberish filter — same as main chat
-        if _is_gibberish(prompt):
-            return JSONResponse({"response": "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, shipping, or custom orders. 🧸"})
-
-        SUPPORT_SIGNALS = [
+        # 1. FAQ lookup — skip for support/context messages
+        _SUPPORT = [
             "not working", "doesn't work", "cant", "can't", "wont", "won't",
             "error", "problem", "issue", "broken", "failed", "wrong",
             "didn't", "didnt", "still ", "again", "already", " it ",
             "that ", "this ", "the one", "my order",
         ]
-        _skip_faq = any(sig in q_lower for sig in SUPPORT_SIGNALS)
+        _skip_faq = any(s in q_lower for s in _SUPPORT)
         faq_answer = None if _skip_faq else lookup_faq(prompt)
         if faq_answer:
             save_history_row(sid, prompt, faq_answer)
             return JSONResponse({"response": faq_answer})
 
+        # 2. Handoff — clean message only, no AI
         if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
             handoff_msg = "I'll connect you with our team right away!"
             save_history_row(sid, prompt, handoff_msg)
-            return JSONResponse({"response": handoff_msg, "handoff": True,
-                                 "whatsapp": "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%20help%20%F0%9F%A7%B8"})
+            return JSONResponse({
+                "response": handoff_msg,
+                "handoff": True,
+                "whatsapp": "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%20help%20%F0%9F%A7%B8"
+            })
 
-        # Lead capture check
+        # 3. Lead capture check
         LEAD_INTENT = [
-            "price","cost","how much","order","buy","purchase",
-            "ship","deliver","custom","gift","birthday",
-            "available","stock","checkout","add to cart",
+            "price", "cost", "how much", "order", "buy", "purchase",
+            "ship", "deliver", "custom", "gift", "birthday",
+            "available", "stock", "checkout", "add to cart",
         ]
         history = load_history(sid)
         has_intent = any(kw in q_lower for kw in LEAD_INTENT)
         msg_count = len(history)
         try:
-            sb = _get_supabase()
-            existing_lead = sb.table("leads").select("id").eq("context", f"widget_{sid}").execute().data
+            sb2 = _get_supabase()
+            existing_lead = sb2.table("leads").select("id").eq("context", f"widget_{sid}").execute().data
             lead_captured = bool(existing_lead)
         except Exception:
             lead_captured = False
         show_lead = not lead_captured and (has_intent or msg_count >= 8)
 
+        # 4. Build enhanced prompt with product data — fetch ALL locally, filter by keywords
         enhanced = prompt
-        if any(kw in q_lower for kw in STOCK_KEYWORDS):
-            info = lookup_stock(prompt)
-            if info:
-                enhanced = prompt + "\n\n[LIVE STOCK DATA]\n" + info
-        elif any(kw in q_lower for kw in PRODUCT_KEYWORDS) or any(
-            kw in q_lower for kw in ["rainbow","giant","mini","snuggle","gentle","soft","small","large","big"]
-        ):
+        PROD_TRIGGERS = list(PRODUCT_KEYWORDS) + ["rainbow", "giant", "mini", "snuggle", "gentle", "large", "soft"]
+        if any(kw in q_lower for kw in PROD_TRIGGERS) or any(kw in q_lower for kw in STOCK_KEYWORDS):
             try:
-                # Search using full conversation context if current message is short
-                search_query = prompt
-                if len(prompt.split()) <= 3 and history:
-                    recent = " ".join([m.get("content","") for m in history[-3:]])
-                    search_query = recent + " " + prompt
-                products = get_engine().search_products(search_query, max_results=5)
-                if products:
-                    enhanced = (
-                        prompt +
-                        "\n\n[PRODUCT INFO — use these exact prices and details in your response]\n" +
-                        get_engine().format_product_response(products) +
-                        "\n[END PRODUCT INFO — do not invent prices or details not listed above]"
-                    )
-            except Exception:
-                pass
+                sb3 = _get_supabase()
+                all_prods = sb3.table("products").select(
+                    "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
+                ).eq("client_id", CLIENT_ID).execute().data or []
 
-        history = load_history(sid)
+                search_terms = set(w.lower() for w in prompt.split() if len(w) > 2)
+                for msg in reversed(history[-3:]):
+                    if msg.get("role") == "user":
+                        for w in msg.get("content", "").split():
+                            if len(w) > 2:
+                                search_terms.add(w.lower())
+                        break
+
+                matched = [
+                    p for p in all_prods
+                    if any(
+                        t in p.get("name", "").lower() or t in p.get("category", "").lower()
+                        for t in search_terms
+                    )
+                ]
+                if not matched:
+                    matched = all_prods
+
+                if matched:
+                    lines = []
+                    for p in matched[:5]:
+                        stock_status = "In stock" if p.get("in_stock") else "Out of stock"
+                        lines.append(
+                            f"{p['name']} | ZAR {p.get('price', 0):.2f} | {stock_status} | "
+                            f"Size: {p.get('size_cm', '?')}cm | {p.get('material', '')}"
+                        )
+                    enhanced = (
+                        prompt
+                        + "\n\n[PRODUCT INFO — use ONLY these exact prices and details, do not invent anything]\n"
+                        + "\n".join(lines)
+                        + "\n[END PRODUCT INFO]"
+                    )
+            except Exception as prod_err:
+                logger.error(f"Product lookup error: {prod_err}")
+
+        # 5. AI response
         history.append({"role": "user", "content": prompt})
         full = "".join(get_engine().stream_answer(enhanced, chat_history=history))
+        full = _strip_urls(full)
         save_history_row(sid, prompt, full)
         resp = {"response": full}
         if show_lead:
