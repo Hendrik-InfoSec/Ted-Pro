@@ -10,10 +10,10 @@ from supabase import create_client, Client
 
 class HybridEngine:
     def __init__(self, api_key: str, supabase_url: str, supabase_key: str,
-                 model: str = "openai/gpt-3.5-turbo", client_id: Optional[str] = None):
+                 model: str = "openai/gpt-4o-mini", client_id: Optional[str] = None):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.api_key = api_key
-        self.model = model
+        self.model = os.environ.get("AI_MODEL", model)
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         self.client_id = client_id or "default"
 
@@ -211,16 +211,25 @@ class HybridEngine:
                 "- For custom orders, express genuine excitement and ask what they have in mind\n\n"
 
                 "Tone rules:\\n"
-                "- Be warm, confident, and professional — like a great shop assistant\\n"
-                "- Keep responses short and direct — under 100 words\\n"
-                "- Always steer toward a purchase decision naturally\\n"
-                "- If a customer shows interest, tell them to visit the shop or ask what they need\\n"
-                "- You can ask ONE follow-up question to understand what a customer wants.\\n"
-                "  Never ask the same question twice. If they are vague again, give them options instead.\\n"
-                "- Read the conversation history — never repeat information already given\\n"
+                "- The customer is ALREADY on the website browsing — treat them like\\n"
+                "  a customer already in the store, not someone who just walked in\\n"
+                "- Never say things like visit our website or check out our site —\\n"
+                "  they are already here. Instead say add to cart or place your order\\n"
+                "- Be warm, confident, and direct — like a great in-store assistant\\n"
+                "- Keep responses under 100 words\\n"
+                "- Steer toward a purchase — help them decide, not just browse\\n"
+                "- HANDOFF RULES — pass to human when:\\n"
+                "  1. Customer has a specific order problem (wrong item, damaged, missing)\\n"
+                "  2. Customer is asking for a price that is not in your product info\\n"
+                "  3. Customer is angry or frustrated\\n"
+                "  4. Customer explicitly asks for a human\\n"
+                "  5. You genuinely do not know the answer\\n"
+                "- Do NOT hand off for: general questions, shipping times, FAQs, product info\\n"
+                "- Ask ONE follow-up question if needed. Never ask the same thing twice.\\n"
+                "  If they are vague again, give them options instead\\n"
+                "- Read conversation history — never repeat information already given\\n"
                 "- Never make up product details — only use what you are given\\n"
-                "- Do not add any closing line, sign-off, emoji sign-off, or farewell.\\n"
-                "  End your answer. Full stop. Nothing after.\\n"
+                "- No closing lines, sign-offs or farewells of any kind. Just answer.\\n"
             )
 
             full_answer = ""
