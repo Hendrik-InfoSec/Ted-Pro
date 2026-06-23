@@ -275,6 +275,128 @@ def lookup_stock(query: str) -> str | None:
 # FAQ lookup — checks faqs table directly, single source of truth
 # qa_cache is bypassed for FAQ answers, faqs table owns them
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Smart product matching — handles typos, partial names, vague queries
+# Returns direct price answers (no AI) for confident matches to kill hallucination
+# ---------------------------------------------------------------------------
+import difflib as _difflib
+
+# Words that are NOT product identifiers — ignore when matching
+_STOPWORDS = {
+    "how", "much", "is", "the", "a", "an", "for", "of", "do", "you", "have",
+    "what", "whats", "price", "cost", "are", "your", "i", "want", "to", "buy",
+    "get", "can", "and", "or", "me", "tell", "about", "in", "stock", "available",
+    "this", "that", "it", "one", "please", "guys", "got", "any", "show",
+    "looking", "need", "would", "like", "with", "plushie", "plush", "toy",
+}
+
+
+def _normalize_word(w: str) -> str:
+    return "".join(c for c in w.lower() if c.isalnum())
+
+
+def smart_match_products(query: str, all_products: list) -> list:
+    """
+    Match products against a query, tolerant of typos and partial names.
+    Returns list of (product, score) sorted by best match. Score 0-1.
+    """
+    q_words = [_normalize_word(w) for w in query.split()]
+    q_words = [w for w in q_words if w and w not in _STOPWORDS and len(w) >= 2]
+    if not q_words:
+        return []
+
+    scored = []
+    for p in all_products:
+        name = (p.get("name") or "").lower()
+        category = (p.get("category") or "").lower()
+        name_words = [_normalize_word(w) for w in name.split()]
+        cat_words = [_normalize_word(w) for w in category.split()]
+        haystack = set(name_words + cat_words)
+
+        score = 0.0
+        for qw in q_words:
+            # exact word in name/category
+            if qw in haystack:
+                score += 1.0
+                continue
+            # substring match (e.g. "rex" in "trex")
+            if any(qw in hw or hw in qw for hw in haystack if len(hw) >= 3):
+                score += 0.8
+                continue
+            # fuzzy match for typos (e.g. "unicrn" ~ "unicorn")
+            best = 0.0
+            for hw in haystack:
+                if len(hw) >= 3:
+                    ratio = _difflib.SequenceMatcher(None, qw, hw).ratio()
+                    best = max(best, ratio)
+            if best >= 0.75:
+                score += best
+
+        # Normalize by number of query words
+        norm_score = score / len(q_words) if q_words else 0
+        if norm_score >= 0.5:
+            scored.append((p, norm_score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored
+
+
+def _fmt_price(p: dict) -> str:
+    cur = p.get("currency", "ZAR")
+    try:
+        val = float(p.get("price") or 0)
+    except (ValueError, TypeError):
+        val = 0
+    return f"{cur} {val:.2f}"
+
+
+def direct_price_answer(query: str, all_products: list) -> str | None:
+    """
+    For clear price questions, return an exact answer from the database — no AI.
+    Returns None if the question isn't a clear price ask or no confident match.
+    """
+    ql = query.lower()
+    is_price_q = any(kw in ql for kw in [
+        "how much", "price", "cost", "what's the", "whats the", "how many rand"
+    ])
+    if not is_price_q:
+        return None
+
+    matches = smart_match_products(query, all_products)
+    if not matches:
+        return None
+
+    top_score = matches[0][1]
+
+    # One confident match → direct answer
+    if len(matches) == 1 or (top_score >= 0.99 and matches[0][1] - matches[1][1] >= 0.3):
+        p = matches[0][0]
+        name = p.get("name", "this item")
+        price = _fmt_price(p)
+        stock = "in stock" if p.get("in_stock") else "currently out of stock"
+        size = f"{p.get('size_cm')}cm" if p.get("size_cm") else ""
+        extra = f" ({size})" if size else ""
+        return f"The {name}{extra} is {price} and it's {stock}. Would you like to add it to your cart?"
+
+    # Multiple matches → list all with their real prices
+    strong = [m for m in matches if m[1] >= 0.75]
+    if len(strong) >= 2:
+        lines = []
+        for p, _ in strong[:4]:
+            stock = "in stock" if p.get("in_stock") else "out of stock"
+            lines.append(f"{p.get('name')} — {_fmt_price(p)} ({stock})")
+        listing = " • ".join(lines)
+        return f"We have a few options: {listing}. Which one would you like?"
+
+    # Single strong match among weak ones
+    if top_score >= 0.75:
+        p = matches[0][0]
+        return f"The {p.get('name')} is {_fmt_price(p)} and it's {'in stock' if p.get('in_stock') else 'out of stock'}. Want to add it to your cart?"
+
+    return None
+
+
 def lookup_faq(query: str) -> str | None:
     """
     Check the faqs table for an answer before hitting the AI.
@@ -2418,13 +2540,19 @@ async def widget_chat(request: Request):
                                 search_terms.add(w.lower())
                         break
 
-                matched = [
-                    p for p in all_prods
-                    if any(
-                        t in p.get("name", "").lower() or t in p.get("category", "").lower()
-                        for t in search_terms
-                    )
-                ]
+                # Try direct price answer first — bypasses AI, no hallucination
+                direct = direct_price_answer(prompt, all_prods)
+                if direct:
+                    direct = _strip_urls(direct)
+                    save_history_row(sid, prompt, direct)
+                    _resp = {"response": direct}
+                    if show_lead:
+                        _resp["show_lead"] = True
+                    return JSONResponse(_resp)
+
+                # Otherwise use smart matching to give AI the right products
+                smart = smart_match_products(prompt, all_prods)
+                matched = [m[0] for m in smart] if smart else []
                 if not matched:
                     matched = all_prods
 
