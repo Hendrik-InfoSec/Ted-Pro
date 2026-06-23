@@ -1506,7 +1506,7 @@ async def chat_response(request: Request):
                     for p in matched[:5]:
                         stk = "In stock" if p.get("in_stock") else "Out of stock"
                         lines.append(
-                            f"{p['name']} | ZAR {p.get('price',0):.2f} | {stk} | "
+                            f"{p['name']} | ZAR {float(p.get('price') or 0):.2f} | {stk} | "
                             f"Size: {p.get('size_cm','?')}cm | {p.get('material','')}"
                         )
                     enhanced_query = (
@@ -2433,7 +2433,7 @@ async def widget_chat(request: Request):
                     for p in matched[:5]:
                         stock_status = "In stock" if p.get("in_stock") else "Out of stock"
                         lines.append(
-                            f"{p['name']} | ZAR {p.get('price', 0):.2f} | {stock_status} | "
+                            f"{p['name']} | ZAR {float(p.get('price') or 0):.2f} | {stock_status} | "
                             f"Size: {p.get('size_cm', '?')}cm | {p.get('material', '')}"
                         )
                     enhanced = (
