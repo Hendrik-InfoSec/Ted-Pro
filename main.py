@@ -1601,10 +1601,10 @@ async def chat_response(request: Request):
 
         # ── 1. FAQ lookup — skip if complaint/context-dependent ───────────
         _SUPPORT = [
-            "not working", "doesn't work", "cant", "can't", "wont", "won't",
-            "error", "problem", "issue", "broken", "failed", "wrong",
-            "didn't", "didnt", "still ", "again", "already", " it ",
-            "that ", "this ", "the one", "my order",
+            "not working", "doesn't work", "cant ", "can't ", "wont ", "won't ",
+            "error", "broken", "failed", "hasn't arrived", "hasnt arrived",
+            "never arrived", "didn't receive", "didnt receive", "my order",
+            "refund", "damaged", "faulty", "complaint",
         ]
         _skip_faq = any(s in q_lower for s in _SUPPORT)
         faq_answer = None if _skip_faq else lookup_faq(query)
