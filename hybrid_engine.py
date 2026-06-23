@@ -64,6 +64,13 @@ class HybridEngine:
 
     def _save_to_cache(self, question: str, answer: str):
         try:
+            # Never cache product/price answers — they must always be live
+            _ql = question.lower()
+            _skip = ["price","cost","how much","stock","available","size","rand",
+                     "buy","order","unicorn","teddy","bear","plushie","dino","bunny",
+                     "product","cheap","expensive","rainbow","giant","mini","r3","r4","r5"]
+            if any(w in _ql for w in _skip) or "[PRODUCT INFO" in question:
+                return
             normalized = self._normalize_question(question)
             existing = self.supabase.table('qa_cache').select("id").eq(
                 'question_normalized', normalized
@@ -181,8 +188,17 @@ class HybridEngine:
     def stream_answer(self, question: str, chat_history: list = None) -> Generator[str, None, None]:
         self.logger.info(f"Processing question: '{question[:60]}'")
 
-        # Skip cache for conversational messages — context-dependent
-        skip_cache = len(question.strip()) < 20 or chat_history
+        # Skip cache for conversational messages and ANY product/price query
+        _ql = question.lower()
+        _price_words = ["price","cost","how much","stock","available","size","r ",
+                        "rand","buy","order","unicorn","teddy","bear","plushie","dino",
+                        "bunny","product","cheap","expensive","rainbow","giant","mini"]
+        skip_cache = (
+            len(question.strip()) < 20
+            or chat_history
+            or any(w in _ql for w in _price_words)
+            or "[PRODUCT INFO" in question
+        )
         cached = None if skip_cache else self.search_local_cache(question)
         if cached:
             for char in cached:
