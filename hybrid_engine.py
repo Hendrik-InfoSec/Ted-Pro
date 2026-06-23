@@ -162,7 +162,7 @@ class HybridEngine:
             return "No matching products in stock right now."
         response = "Here are some options:\n\n"
         for i, p in enumerate(products, 1):
-            price    = f"{p.get('currency','ZAR')} {p.get('price',0):.2f}"
+            price    = f"{p.get('currency','ZAR')} {float(p.get('price') or 0):.2f}"
             name     = p.get('name', 'Unknown')
             desc     = p.get('description', '')[:120]
             material = p.get('material', '')
