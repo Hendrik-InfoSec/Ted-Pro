@@ -333,10 +333,29 @@ def smart_match_products(query: str, all_products: list) -> list:
             if best >= 0.75:
                 score += best
 
-        # Normalize by number of query words
-        norm_score = score / len(q_words) if q_words else 0
-        if norm_score >= 0.5:
-            scored.append((p, norm_score))
+        # Score = best single-word match (not average) so filler words don't dilute
+        # e.g. "awesome and dinos?" → "dinos" matches strongly, filler ignored
+        best_word_score = 0.0
+        matched_words = 0
+        for qw in q_words:
+            ws = 0.0
+            if qw in haystack:
+                ws = 1.0
+            elif any(qw in hw or hw in qw for hw in haystack if len(hw) >= 3):
+                ws = 0.8
+            else:
+                for hw in haystack:
+                    if len(hw) >= 3:
+                        ws = max(ws, _difflib.SequenceMatcher(None, qw, hw).ratio())
+            best_word_score = max(best_word_score, ws)
+            if ws >= 0.7:
+                matched_words += 1
+        # Score combines best match + how many query words matched this product
+        # so "rainbow unicorn" ranks Rainbow Unicorn (2 words) above Stardust (1 word)
+        coverage = matched_words / len(q_words) if q_words else 0
+        final_score = best_word_score * 0.6 + coverage * 0.4
+        if final_score >= 0.5:
+            scored.append((p, final_score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored
@@ -353,25 +372,30 @@ def _fmt_price(p: dict) -> str:
 
 def direct_price_answer(query: str, all_products: list) -> str | None:
     """
-    For clear price questions, return an exact answer from the database — no AI.
-    Returns None if the question isn't a clear price ask or no confident match.
+    For product/price questions, return an exact answer from the database — no AI.
+    Triggers on price words OR when the query clearly references products/categories.
+    Returns None only for genuinely vague/conversational messages.
     """
     ql = query.lower()
     is_price_q = any(kw in ql for kw in [
-        "how much", "price", "cost", "what's the", "whats the", "how many rand"
+        "how much", "price", "cost", "what's the", "whats the", "how many rand",
+        "what do", "going for", "charge", "expensive", "cheap"
     ])
-    if not is_price_q:
-        return None
 
     matches = smart_match_products(query, all_products)
     if not matches:
         return None
 
-    top_score = matches[0][1]
+    # If query references products (even without price words), answer directly
+    # e.g. "and dinos?", "what about bears?", "show me unicorns"
+    has_product_ref = matches[0][1] >= 0.75
+    if not is_price_q and not has_product_ref:
+        return None
 
-    # One confident match → direct answer
-    if len(matches) == 1 or (top_score >= 0.99 and matches[0][1] - matches[1][1] >= 0.3):
-        p = matches[0][0]
+    top_score = matches[0][1]
+    second_score = matches[1][1] if len(matches) > 1 else 0
+
+    def _single(p):
         name = p.get("name", "this item")
         price = _fmt_price(p)
         stock = "in stock" if p.get("in_stock") else "currently out of stock"
@@ -379,22 +403,23 @@ def direct_price_answer(query: str, all_products: list) -> str | None:
         extra = f" ({size})" if size else ""
         return f"The {name}{extra} is {price} and it's {stock}. Would you like to add it to your cart?"
 
-    # Multiple matches → list all with their real prices
-    strong = [m for m in matches if m[1] >= 0.75]
+    # Clear single winner: only one match, or top beats second by a clear gap
+    if len(matches) == 1:
+        return _single(matches[0][0])
+    if top_score - second_score >= 0.15:
+        return _single(matches[0][0])
+
+    # Multiple close matches → list all with real prices so customer picks
+    strong = [m for m in matches if m[1] >= top_score - 0.15]
     if len(strong) >= 2:
         lines = []
-        for p, _ in strong[:4]:
+        for p, _ in strong[:5]:
             stock = "in stock" if p.get("in_stock") else "out of stock"
             lines.append(f"{p.get('name')} — {_fmt_price(p)} ({stock})")
         listing = " • ".join(lines)
-        return f"We have a few options: {listing}. Which one would you like?"
+        return f"Here's what we have: {listing}. Which one would you like?"
 
-    # Single strong match among weak ones
-    if top_score >= 0.75:
-        p = matches[0][0]
-        return f"The {p.get('name')} is {_fmt_price(p)} and it's {'in stock' if p.get('in_stock') else 'out of stock'}. Want to add it to your cart?"
-
-    return None
+    return _single(matches[0][0])
 
 
 def lookup_faq(query: str) -> str | None:
