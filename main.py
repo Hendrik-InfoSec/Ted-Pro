@@ -18,6 +18,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from hybrid_engine import HybridEngine
+from analytics import compute_metrics, render_dashboard
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -68,11 +69,13 @@ WHATSAPP_URL  = "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%2
 HANDOFF_KEYWORDS = [
     "speak to someone", "talk to someone", "real person", "human",
     "want a human", "want to speak", "want to talk", "get a human",
-    "speak to a person", "contact you", "call you", "whatsapp",
-    "not sure", "complicated", "complex", "confused",
+    "speak to a person", "talk to a person", "speak to them", "talk to them",
+    "speak to a human", "talk to a human", "real human", "live agent",
+    "customer service", "customer support", "customer care",
+    "contact you", "call you", "phone you", "whatsapp", "agent",
+    "representative", "someone real", "an actual person",
     "custom order", "bulk order", "corporate", "wedding", "event",
-    "complaint", "problem", "wrong", "damaged", "broken",
-    "refund", "return", "exchange", "urgent",
+    "complaint", "damaged", "broken", "refund", "return", "exchange", "urgent",
 ]
 
 BUY_KEYWORDS = [
@@ -2130,6 +2133,30 @@ async def admin_logout(request: Request):
     request.session.pop("admin_authenticated", None)
     return RedirectResponse(url="/admin", status_code=303)
 
+@app.get("/admin/impact", response_class=HTMLResponse)
+async def admin_impact(request: Request):
+    """Owner-facing revenue/impact dashboard — the screen that sells the product."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    try:
+        sb = _get_supabase()
+        biz = os.environ.get("BUSINESS_NAME", "Your Business")
+        metrics = compute_metrics(sb, CLIENT_ID, days=30)
+        panel = render_dashboard(metrics, biz)
+        content = (
+            "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-5xl mx-auto'>"
+            "<div class='flex justify-between items-center mb-6'>"
+            "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f4c8 Impact Dashboard</h1>"
+            "<div><a href='/admin' class='text-sm text-[#8B6914] hover:text-[#FF922B] mr-4'>Admin</a>"
+            "<a href='/admin/logout' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Logout</a></div></div>"
+            + panel + "</div></div>"
+        )
+        return HTMLResponse(content=render_page("Impact Dashboard", content))
+    except Exception as e:
+        logger.error(f"admin_impact error: {e}")
+        return HTMLResponse(f'<div class="p-8 text-red-500">Impact dashboard error: {e}</div>')
+
+
 async def _admin_dashboard(request: Request):
     try:
         sb = _get_supabase()
@@ -2276,6 +2303,7 @@ async def _admin_dashboard(request: Request):
             "<div class='flex justify-between items-center mb-6'>"
             "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f4ca Admin Dashboard "
             "<span style='font-size:11px;font-weight:400;color:#8B6914'>v3.1</span></h1>"
+            "<a href='/admin/impact' class='text-sm font-bold text-[#FF922B] hover:underline mr-4'>\U0001f4c8 Impact</a>"
             "<a href='/admin/logout' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Logout</a></div>"
             + tabs_html
             + "<div style='margin-top:1.5rem'>"
