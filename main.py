@@ -1618,36 +1618,39 @@ async def chat_response(request: Request):
             store["processing"] = False
             return HTMLResponse(content=bot_bubble(final, t))
 
-        # ── 2. Stock direct lookup ────────────────────────────────────────
-        is_stock_query = any(kw in q_lower for kw in STOCK_KEYWORDS)
-        if is_stock_query:
-            stock_info = lookup_stock(query)
-            if stock_info:
-                enhanced_query = (
-                    query
-                    + "\n\n[LIVE STOCK DATA — use this to answer accurately]\n"
-                    + stock_info
-                )
+        # Load history up front so product matching can use conversation context
+        history_for_context = load_history(session_id)
 
-        # ── 3. Product context for general product queries ────────────────
-        elif any(kw in q_lower for kw in PRODUCT_KEYWORDS) or any(
-            kw in q_lower for kw in ["rainbow","giant","mini","snuggle","gentle","large","soft"]
-        ):
+        # ── 2. Product/price questions → deterministic DB answer (no AI) ───
+        is_stock_query = any(kw in q_lower for kw in STOCK_KEYWORDS)
+        is_product_q = (
+            any(kw in q_lower for kw in PRODUCT_KEYWORDS)
+            or any(kw in q_lower for kw in ["rainbow","giant","mini","snuggle","gentle","large","soft"])
+            or is_stock_query
+        )
+        if is_product_q:
             try:
                 sb_p = _get_supabase()
                 all_prods = sb_p.table("products").select(
                     "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
                 ).eq("client_id", CLIENT_ID).execute().data or []
-                terms = set(w.lower() for w in query.split() if len(w) > 2)
-                for m in reversed((chat_history or [])[-3:]):
-                    if m.get("role") == "user":
-                        for w in m.get("content","").split():
-                            if len(w) > 2: terms.add(w.lower())
-                        break
-                matched = [p for p in all_prods if any(
-                    t in p.get("name","").lower() or t in p.get("category","").lower() for t in terms
-                )]
-                if not matched: matched = all_prods
+
+                # Direct DB answer first — bypasses AI entirely, zero hallucination
+                direct = direct_price_answer(query, all_prods)
+                if direct:
+                    direct = _strip_urls(direct)
+                    final = apply_teddy_vibes(direct)
+                    t = get_teddy_time()
+                    save_history_row(session_id, query, final)
+                    store["response"]   = final
+                    store["time"]       = t
+                    store["ready"]      = True
+                    store["processing"] = False
+                    return HTMLResponse(content=bot_bubble(final, t))
+
+                # No clear single answer → give AI the matched products only
+                smart = smart_match_products(query, all_prods)
+                matched = [m[0] for m in smart] if smart else all_prods
                 if matched:
                     lines = []
                     for p in matched[:5]:
@@ -1665,7 +1668,6 @@ async def chat_response(request: Request):
             except Exception as _e:
                 logger.error(f"Product lookup error: {_e}")
 
-        history_for_context = load_history(session_id)
         history_for_context.append({"role": "user", "content": query})
 
         full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
@@ -2507,12 +2509,12 @@ async def widget_chat(request: Request):
 
         q_lower = prompt.lower()
 
-        # 1. FAQ lookup — skip for support/context messages
+        # 1. FAQ lookup — skip only for real complaints (not normal follow-ups)
         _SUPPORT = [
-            "not working", "doesn't work", "cant", "can't", "wont", "won't",
-            "error", "problem", "issue", "broken", "failed", "wrong",
-            "didn't", "didnt", "still ", "again", "already", " it ",
-            "that ", "this ", "the one", "my order",
+            "not working", "doesn't work", "cant ", "can't ", "wont ", "won't ",
+            "error", "broken", "failed", "hasn't arrived", "hasnt arrived",
+            "never arrived", "didn't receive", "didnt receive", "my order",
+            "refund", "damaged", "faulty", "complaint",
         ]
         _skip_faq = any(s in q_lower for s in _SUPPORT)
         faq_answer = None if _skip_faq else lookup_faq(prompt)
@@ -2547,24 +2549,26 @@ async def widget_chat(request: Request):
             lead_captured = False
         show_lead = not lead_captured and (has_intent or msg_count >= 8)
 
-        # 4. Build enhanced prompt with product data — fetch ALL locally, filter by keywords
+        # 4. Build enhanced prompt with product data — fetch ALL locally
+        # Always fetch products so we can match against names/categories too,
+        # not just hardcoded keywords (catches "bunnies?", "stompy", etc.)
         enhanced = prompt
+        try:
+            sb3 = _get_supabase()
+            all_prods = sb3.table("products").select(
+                "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
+            ).eq("client_id", CLIENT_ID).execute().data or []
+        except Exception as _fe:
+            logger.error(f"Product fetch error: {_fe}")
+            all_prods = []
+
+        # Does this message reference any real product? (keyword OR name/category match)
         PROD_TRIGGERS = list(PRODUCT_KEYWORDS) + ["rainbow", "giant", "mini", "snuggle", "gentle", "large", "soft"]
-        if any(kw in q_lower for kw in PROD_TRIGGERS) or any(kw in q_lower for kw in STOCK_KEYWORDS):
+        keyword_hit = any(kw in q_lower for kw in PROD_TRIGGERS) or any(kw in q_lower for kw in STOCK_KEYWORDS)
+        name_hit = bool(smart_match_products(prompt, all_prods)) if all_prods else False
+
+        if all_prods and (keyword_hit or name_hit):
             try:
-                sb3 = _get_supabase()
-                all_prods = sb3.table("products").select(
-                    "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
-                ).eq("client_id", CLIENT_ID).execute().data or []
-
-                search_terms = set(w.lower() for w in prompt.split() if len(w) > 2)
-                for msg in reversed(history[-3:]):
-                    if msg.get("role") == "user":
-                        for w in msg.get("content", "").split():
-                            if len(w) > 2:
-                                search_terms.add(w.lower())
-                        break
-
                 # Try direct price answer first — bypasses AI, no hallucination
                 direct = direct_price_answer(prompt, all_prods)
                 if direct:
