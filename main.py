@@ -386,9 +386,10 @@ def direct_price_answer(query: str, all_products: list) -> str | None:
     if not matches:
         return None
 
-    # If query references products (even without price words), answer directly
-    # e.g. "and dinos?", "what about bears?", "show me unicorns"
-    has_product_ref = matches[0][1] >= 0.75
+    # If query references products (even without price words), answer directly.
+    # Use a lower bar (0.55) so typos in filler-heavy questions still resolve,
+    # e.g. "do you have anything related to bearssr?" → bears category
+    has_product_ref = matches[0][1] >= 0.55
     if not is_price_q and not has_product_ref:
         return None
 
@@ -420,6 +421,35 @@ def direct_price_answer(query: str, all_products: list) -> str | None:
         return f"Here's what we have: {listing}. Which one would you like?"
 
     return _single(matches[0][0])
+
+
+def detect_fake_products(ai_response: str, real_products: list) -> bool:
+    """
+    Returns True if the AI response mentions a product name that does NOT
+    exist in the real catalog — a hallucination. Used to catch and replace
+    invented product names before they reach the customer.
+    """
+    if not real_products:
+        return False
+    real_names = set()
+    for p in real_products:
+        nm = (p.get("name") or "").lower()
+        for w in nm.split():
+            w2 = "".join(c for c in w if c.isalnum())
+            if len(w2) >= 3:
+                real_names.add(w2)
+    # Look for "<Word> Bear/Bunny/Unicorn..." patterns the AI may invent
+    import re as _re
+    suspicious = _re.findall(
+        r"([A-Z][a-z]+)\s+(?:Bear|Bunny|Unicorn|Dino|Dinosaur|Teddy|Triceratops)",
+        ai_response
+    )
+    for word in suspicious:
+        w2 = word.lower()
+        if len(w2) >= 3 and w2 not in real_names and w2 not in ("the","our","a","two","new","cute","soft"):
+            logger.warning(f"Hallucinated product name detected: '{word}'")
+            return True
+    return False
 
 
 def lookup_faq(query: str) -> str | None:
@@ -2606,6 +2636,17 @@ async def widget_chat(request: Request):
         history.append({"role": "user", "content": prompt})
         full = "".join(get_engine().stream_answer(enhanced, chat_history=history))
         full = _strip_urls(full)
+
+        # Hallucination guard: if AI invented product names, replace with real list
+        if all_prods and detect_fake_products(full, all_prods):
+            smart = smart_match_products(prompt, all_prods)
+            picks = [m[0] for m in smart][:5] if smart else all_prods[:5]
+            lines = []
+            for p in picks:
+                stk = "in stock" if p.get("in_stock") else "out of stock"
+                lines.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({stk})")
+            full = "Here's what we have: " + " • ".join(lines) + ". Which one would you like?"
+
         save_history_row(sid, prompt, full)
         resp = {"response": full}
         if show_lead:
