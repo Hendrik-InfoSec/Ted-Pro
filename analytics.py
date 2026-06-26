@@ -176,7 +176,7 @@ def _esc(s) -> str:
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
-def render_dashboard(metrics: dict, business_name: str = "Your Business") -> str:
+def render_dashboard(metrics: dict, business_name: str = "Your Business", order_metrics: dict | None = None) -> str:
     """
     Render the owner-facing revenue dashboard as an HTML fragment.
     Self-contained inline styles so it drops into the existing admin shell.
@@ -193,6 +193,25 @@ def render_dashboard(metrics: dict, business_name: str = "Your Business") -> str
             f"color:#8B6914;font-weight:600'>{label}</div>"
             f"<div style='font-size:30px;font-weight:700;color:{accent};margin-top:6px'>{value}</div>"
             f"<div style='font-size:12px;color:#8B6914;margin-top:2px'>{sub}</div></div>"
+        )
+
+    # Confirmed revenue hero — shown when real orders are connected.
+    # This is the number that turns a demo into a signed contract.
+    confirmed_hero = ""
+    if order_metrics and order_metrics.get("orders_period", 0) > 0:
+        rev_attr = order_metrics.get("revenue_attributed", 0)
+        rev_total = order_metrics.get("revenue_total", 0)
+        ocur = order_metrics.get("currency", cur)
+        confirmed_hero = (
+            f"<div style='background:linear-gradient(135deg,#16a34a,#15803d);color:white;"
+            f"border-radius:20px;padding:28px;margin-bottom:16px'>"
+            f"<div style='font-size:13px;text-transform:uppercase;letter-spacing:.08em;opacity:.9'>"
+            f"Revenue Teddy is credited with · last {days} days</div>"
+            f"<div style='font-size:44px;font-weight:800;margin-top:8px'>{ocur} {rev_attr:,.0f}</div>"
+            f"<div style='font-size:13px;opacity:.9;margin-top:6px'>"
+            f"From {order_metrics.get('attributed_orders',0)} attributed orders · "
+            f"{ocur} {rev_total:,.0f} total store revenue tracked · "
+            f"{order_metrics.get('attribution_rate',0)}% attribution rate</div></div>"
         )
 
     # Headline ROI card — the number that sells the product
@@ -283,5 +302,5 @@ def render_dashboard(metrics: dict, business_name: str = "Your Business") -> str
         f"{_esc(business_name)} \u2014 Teddy's Impact</h2>"
         f"<p style='font-size:13px;color:#8B6914;margin-bottom:20px'>"
         f"What your assistant did over the last {days} days.</p>"
-        + hero + cards + activity + insights + note + "</div>"
+        + confirmed_hero + hero + cards + activity + insights + note + "</div>"
     )
