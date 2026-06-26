@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 
 from hybrid_engine import HybridEngine
 from analytics import compute_metrics, render_dashboard
+from orders import record_order, lookup_order, order_metrics
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -1558,6 +1559,12 @@ STOCK_KEYWORDS = [
     "still", "stock", "left", "do you sell", "can i get", "can i buy",
 ]
 
+ORDER_STATUS_KEYWORDS = [
+    "where is my order", "where's my order", "track my order", "track order",
+    "order status", "my order", "order number", "tracking", "delivery status",
+    "has my order", "when will my order", "where is order",
+]
+
 @app.post("/chat", response_class=HTMLResponse)
 async def chat_post(request: Request, prompt: str = Form(...)):
     init_session(request)
@@ -2133,6 +2140,76 @@ async def admin_logout(request: Request):
     request.session.pop("admin_authenticated", None)
     return RedirectResponse(url="/admin", status_code=303)
 
+@app.post("/webhook/order")
+async def webhook_order(request: Request):
+    """
+    Receive an order from any platform (Shopify, WooCommerce, custom, or a
+    manual test push) and record + attribute it.
+
+    Security: requires a shared secret matching the WEBHOOK_SECRET env var,
+    passed either as ?secret=... or an X-Webhook-Secret header. This keeps the
+    endpoint open to platforms (which can't log in) while blocking the public.
+    """
+    secret_env = os.environ.get("WEBHOOK_SECRET", "")
+    provided = request.query_params.get("secret") or request.headers.get("x-webhook-secret", "")
+    if not secret_env or provided != secret_env:
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+    sb = _get_supabase()
+    result = record_order(sb, payload, CLIENT_ID)
+    status = 200 if result.get("ok") else 400
+    return JSONResponse(result, status_code=status)
+
+
+@app.get("/admin/orders/test", response_class=HTMLResponse)
+async def admin_orders_test(request: Request):
+    """A simple in-admin form to push a test order — lets the owner see
+    attribution + the revenue dashboard working without a real store."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    secret = os.environ.get("WEBHOOK_SECRET", "")
+    content = (
+        "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-lg mx-auto'>"
+        "<div class='flex justify-between items-center mb-6'>"
+        "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f9ea Push a Test Order</h1>"
+        "<a href='/admin/impact' class='text-sm text-[#FF922B] hover:underline'>\U0001f4c8 Impact</a></div>"
+        "<div class='bg-white rounded-xl border border-[#FFE4CC] p-5'>"
+        "<p class='text-sm text-[#5A3A1B] mb-4'>Send a fake order to see attribution + revenue tracking. "
+        "Use an email you captured as a lead to watch it attribute to Teddy.</p>"
+        "<div style='display:flex;flex-direction:column;gap:10px'>"
+        "<input id='o-num' placeholder='Order number (e.g. 1001)' value='1001' style='padding:9px 12px;border:1px solid #FFD5A5;border-radius:8px;font-size:14px'>"
+        "<input id='o-email' placeholder='Customer email' style='padding:9px 12px;border:1px solid #FFD5A5;border-radius:8px;font-size:14px'>"
+        "<input id='o-amount' placeholder='Amount (e.g. 379)' value='379' style='padding:9px 12px;border:1px solid #FFD5A5;border-radius:8px;font-size:14px'>"
+        "<select id='o-status' style='padding:9px 12px;border:1px solid #FFD5A5;border-radius:8px;font-size:14px'>"
+        "<option value='processing'>processing</option><option value='paid'>paid</option>"
+        "<option value='shipped'>shipped</option><option value='delivered'>delivered</option></select>"
+        "<button onclick='pushOrder()' style='padding:10px;background:#FF922B;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer'>Push test order</button>"
+        "<div id='o-result' style='font-size:13px;margin-top:6px'></div>"
+        "</div></div></div></div>"
+        "<script>"
+        "function pushOrder(){"
+        "  var body={order_number:document.getElementById('o-num').value,"
+        "    email:document.getElementById('o-email').value,"
+        "    amount:document.getElementById('o-amount').value,"
+        "    currency:'ZAR',status:document.getElementById('o-status').value,source:'test'};"
+        "  fetch('/webhook/order?secret=" + secret + "',{method:'POST',"
+        "    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})"
+        "  .then(function(r){return r.json();}).then(function(d){"
+        "    var el=document.getElementById('o-result');"
+        "    if(d.ok){el.style.color='#166534';el.innerHTML='\u2705 Order '+d.order_number+' '+d.action+"
+        "      ' \u2014 '+(d.attributed?'<b>attributed to Teddy!</b>':'not attributed (email not a captured lead)')+"
+        "      '. <a href=\"/admin/impact\" style=\"color:#FF922B\">See dashboard</a>';}"
+        "    else{el.style.color='#991b1b';el.textContent='\u274c '+(d.error||'failed');}"
+        "  }).catch(function(e){document.getElementById('o-result').textContent=e.message;});"
+        "}"
+        "</script>"
+    )
+    return HTMLResponse(content=render_page("Test Order", content))
+
+
 @app.get("/admin/impact", response_class=HTMLResponse)
 async def admin_impact(request: Request):
     """Owner-facing revenue/impact dashboard — the screen that sells the product."""
@@ -2142,7 +2219,8 @@ async def admin_impact(request: Request):
         sb = _get_supabase()
         biz = os.environ.get("BUSINESS_NAME", "Your Business")
         metrics = compute_metrics(sb, CLIENT_ID, days=30)
-        panel = render_dashboard(metrics, biz)
+        ometrics = order_metrics(sb, CLIENT_ID, days=30)
+        panel = render_dashboard(metrics, biz, order_metrics=ometrics)
         content = (
             "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-5xl mx-auto'>"
             "<div class='flex justify-between items-center mb-6'>"
@@ -2304,6 +2382,7 @@ async def _admin_dashboard(request: Request):
             "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f4ca Admin Dashboard "
             "<span style='font-size:11px;font-weight:400;color:#8B6914'>v3.1</span></h1>"
             "<a href='/admin/impact' class='text-sm font-bold text-[#FF922B] hover:underline mr-4'>\U0001f4c8 Impact</a>"
+            "<a href='/admin/orders/test' class='text-sm text-[#8B6914] hover:text-[#FF922B] mr-4'>\U0001f9ea Test Order</a>"
             "<a href='/admin/logout' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Logout</a></div>"
             + tabs_html
             + "<div style='margin-top:1.5rem'>"
@@ -2566,6 +2645,22 @@ async def widget_chat(request: Request):
             return JSONResponse({"response": "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, shipping, or custom orders. \U0001f9f8"})
 
         q_lower = prompt.lower()
+
+        # 0. Order status lookup — answer "where's my order #1234" from real data
+        if any(kw in q_lower for kw in ORDER_STATUS_KEYWORDS):
+            try:
+                sb_o = _get_supabase()
+                order_ans = lookup_order(sb_o, prompt, CLIENT_ID)
+                if order_ans:
+                    save_history_row(sid, prompt, order_ans)
+                    return JSONResponse({"response": order_ans})
+                # No match found — ask for the order number rather than hallucinate
+                ask = ("I couldn't find that order. Could you share your order number "
+                       "(it's in your confirmation email), and I'll check the status for you?")
+                save_history_row(sid, prompt, ask)
+                return JSONResponse({"response": ask})
+            except Exception as _oe:
+                logger.error(f"Order lookup error: {_oe}")
 
         # 1. FAQ lookup — skip only for real complaints (not normal follow-ups)
         _SUPPORT = [
