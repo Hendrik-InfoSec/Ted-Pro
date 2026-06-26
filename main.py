@@ -121,7 +121,7 @@ def maybe_add_shop_cta(query: str, response: str) -> str:
             "\n\n---\n"
             "\U0001f6d2 **Ready to grab yours?** Head over to "
             f"[cuddleheros.co.za]({SHOP_URL}) to place your order \u2014 "
-            "use code **TEDDY10** for 10% off your first order! \U0001f9f8"
+            "ask me about a discount on your first order! \U0001f9f8"
         )
         return response + cta
     return response
@@ -1233,7 +1233,7 @@ async def faq_csv_template(request: Request):
         "Payment,What payment methods do you accept?,We accept EFT credit and debit cards SnapScan and PayFast. All payments secure.\n"
         "Returns,What is your return policy?,Contact us within 48 hours of receiving a damaged item and we arrange a replacement or refund.\n"
         "Safety,Are your plushies safe for kids?,Our plushies are made with non-toxic child-safe materials. Suitable from 12 months and up.\n"
-        "General,How do I place an order?,Visit cuddleheros.co.za to browse and order. Use code TEDDY10 for 10 percent off your first order!\n"
+        "General,How do I place an order?,Browse our catalog and add items to your cart to order. Want a discount on your first order? Just ask me and I will help you get a voucher!\n"
     )
     return Response(
         content=csv_content,
