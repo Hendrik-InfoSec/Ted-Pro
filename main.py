@@ -361,8 +361,10 @@ def smart_match_products(query: str, all_products: list) -> list:
             if qw in haystack:
                 score += 1.0
                 continue
-            # substring match (e.g. "rex" in "trex")
-            if any(qw in hw or hw in qw for hw in haystack if len(hw) >= 3):
+            # substring match (e.g. "rex" in "trex") — but only for query words
+            # of 4+ chars, so "hi" doesn't match inside "sunshine", "in" inside
+            # anything, etc. Short greetings must never look like product refs.
+            if len(qw) >= 4 and any(qw in hw or hw in qw for hw in haystack if len(hw) >= 4):
                 score += 0.8
                 continue
             # fuzzy match for typos (e.g. "unicrn" ~ "unicorn")
@@ -382,7 +384,7 @@ def smart_match_products(query: str, all_products: list) -> list:
             ws = 0.0
             if qw in haystack:
                 ws = 1.0
-            elif any(qw in hw or hw in qw for hw in haystack if len(hw) >= 3):
+            elif len(qw) >= 4 and any(qw in hw or hw in qw for hw in haystack if len(hw) >= 4):
                 ws = 0.8
             else:
                 for hw in haystack:
@@ -1991,7 +1993,20 @@ async def download_template(request: Request):
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     if not request.session.get("admin_authenticated"):
-        return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", "Admin Access", "/admin/login"), include_admin_js=True))
+        # Carry the client through so the login form knows which business is signing in.
+        cid = request.query_params.get("client", "")
+        title = "Admin Access"
+        action = "/admin/login"
+        if cid:
+            try:
+                sb = _get_supabase()
+                acct = tenancy.get_account(sb, cid)
+                if acct:
+                    title = acct.get("business_name", "Admin Access")
+                    action = f"/admin/login?client={cid}"
+            except Exception:
+                pass
+        return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", title, action), include_admin_js=True))
     return await _admin_dashboard(request)
 
 @app.get("/admin/conversations/rows", response_class=HTMLResponse)
@@ -2194,7 +2209,13 @@ async def admin_login(request: Request, password: str = Form(...)):
 
 @app.get("/admin/logout")
 async def admin_logout(request: Request):
+    cid = request.session.get("client_id", "")
     request.session.pop("admin_authenticated", None)
+    request.session.pop("client_id", None)
+    # Redirect back to this business's login (not a generic one) so they can sign
+    # back into the SAME account, not accidentally fall through to legacy admin.
+    if cid and cid != CLIENT_ID:
+        return RedirectResponse(url=f"/admin?client={cid}", status_code=303)
     return RedirectResponse(url="/admin", status_code=303)
 
 @app.post("/webhook/order")
@@ -2940,7 +2961,13 @@ async def widget_chat(request: Request):
         # Does this message reference any real product? (keyword OR name/category match)
         PROD_TRIGGERS = list(PRODUCT_KEYWORDS) + ["rainbow", "giant", "mini", "snuggle", "gentle", "large", "soft"]
         keyword_hit = any(kw in q_lower for kw in PROD_TRIGGERS) or any(kw in q_lower for kw in STOCK_KEYWORDS)
-        name_hit = bool(smart_match_products(prompt, all_prods)) if all_prods else False
+        # Greetings and very short messages must never trigger product matching.
+        _GREETINGS = {"hi","hii","hey","heyy","hello","helo","yo","hiya","howzit",
+                      "morning","good morning","good afternoon","good evening","sup",
+                      "hi there","hello there","heita","thanks","thank you","ok","okay","cool"}
+        _is_greeting = q_lower.strip().rstrip("!.?") in _GREETINGS
+        name_hit = (not _is_greeting and len(q_lower.strip()) >= 3
+                    and bool(smart_match_products(prompt, all_prods))) if all_prods else False
 
         if all_prods and (keyword_hit or name_hit):
             try:
