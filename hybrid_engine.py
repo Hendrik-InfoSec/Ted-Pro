@@ -105,12 +105,13 @@ class HybridEngine:
         except Exception as e:
             self.logger.error(f"Conversation save error: {e}")
 
-    def add_lead(self, name: str, email: str, context: str = "chat") -> bool:
+    def add_lead(self, name: str, email: str, context: str = "chat", client_id: str = None) -> bool:
         try:
+            cid = client_id or self.client_id
             hashed_email = hashlib.sha256(email.encode()).hexdigest()
             existing = self.supabase.table('leads').select("id").eq(
                 'hashed_email', hashed_email
-            ).eq('client_id', self.client_id).execute()
+            ).eq('client_id', cid).execute()
 
             if existing.data:
                 self.logger.info(f"Lead already exists: {email}")
@@ -122,7 +123,7 @@ class HybridEngine:
                 'hashed_email': hashed_email,
                 'context': context,
                 'timestamp': datetime.now().isoformat(),
-                'client_id': self.client_id,
+                'client_id': cid,
                 'consent': 'yes'
             }).execute()
             self.logger.info(f"Lead added: {name} <{email}>")
