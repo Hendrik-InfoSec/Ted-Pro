@@ -20,6 +20,7 @@ from slowapi.errors import RateLimitExceeded
 from hybrid_engine import HybridEngine
 from analytics import compute_metrics, render_dashboard
 from orders import record_order, lookup_order, order_metrics
+import tenancy
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -165,14 +166,15 @@ def _get_supabase():
     from supabase import create_client
     return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
 
-def load_history(session_id: str) -> list:
+def load_history(session_id: str, client_id: str = None) -> list:
+    client_id = client_id or CLIENT_ID
     try:
         sb = _get_supabase()
         rows = (
             sb.table("conversations")
             .select("user_message, bot_response, created_at")
             .eq("session_id", session_id)
-            .eq("client_id", CLIENT_ID)
+            .eq("client_id", client_id)
             .order("created_at", desc=False)
             .limit(50)
             .execute()
@@ -187,7 +189,8 @@ def load_history(session_id: str) -> list:
         logger.error(f"load_history error: {e}")
         return []
 
-def save_history_row(session_id: str, user_msg: str, bot_msg: str):
+def save_history_row(session_id: str, user_msg: str, bot_msg: str, client_id: str = None):
+    client_id = client_id or CLIENT_ID
     try:
         sb = _get_supabase()
         sb.table("conversations").insert({
@@ -195,7 +198,7 @@ def save_history_row(session_id: str, user_msg: str, bot_msg: str):
             "user_message": user_msg,
             "bot_response": bot_msg[:2000],
             "created_at":   datetime.now().isoformat(),
-            "client_id":    CLIENT_ID,
+            "client_id":    client_id,
         }).execute()
     except Exception as e:
         logger.error(f"save_history_row error: {e}")
@@ -217,6 +220,23 @@ ADMIN_PASSWORD = _safe_password("ADMIN_PASSWORD")
 DEV_PASSWORD   = _safe_password("DEV_PASSWORD")
 CLIENT_ID      = os.environ.get("CLIENT_ID", "tedpro_client")
 
+# Keep tenancy's legacy fallback in sync with this app's CLIENT_ID env value.
+tenancy.LEGACY_CLIENT_ID = CLIENT_ID
+
+def client_for(request) -> str:
+    """
+    Resolve which tenant this request belongs to. During migration this returns
+    the legacy CLIENT_ID for the existing deployment; once accounts exist and a
+    ?client= or admin session is present, it returns that tenant instead.
+    Never returns None in this app because CLIENT_ID env provides a fallback.
+    """
+    try:
+        sb = _get_supabase()
+    except Exception:
+        sb = None
+    cid = tenancy.resolve_client_id(request, sb)
+    return cid or CLIENT_ID
+
 def _esc_html(s) -> str:
     """Escape HTML special chars so content can't break the page structure."""
     return (str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
@@ -232,7 +252,8 @@ def _admin_verified(request: Request) -> bool:
 # ---------------------------------------------------------------------------
 SCARCITY_THRESHOLD = 10  # Teddy mentions qty only when stock is this low or below
 
-def lookup_stock(query: str) -> str | None:
+def lookup_stock(query: str, client_id: str = None) -> str | None:
+    client_id = client_id or CLIENT_ID
     """
     Direct Supabase product lookup for stock queries.
     Scarcity rule: only reveal quantity to Teddy when <= SCARCITY_THRESHOLD units remain.
@@ -241,7 +262,7 @@ def lookup_stock(query: str) -> str | None:
         sb = _get_supabase()
         all_products = sb.table("products").select(
             "name, in_stock, stock_quantity, price, currency, category, size_cm, material, sku"
-        ).eq("client_id", CLIENT_ID).execute().data or []
+        ).eq("client_id", client_id).execute().data or []
 
         q = query.lower()
         matches = [
@@ -456,7 +477,8 @@ def detect_fake_products(ai_response: str, real_products: list) -> bool:
     return False
 
 
-def lookup_faq(query: str) -> str | None:
+def lookup_faq(query: str, client_id: str = None) -> str | None:
+    client_id = client_id or CLIENT_ID
     """
     Check the faqs table for an answer before hitting the AI.
     Only returns active FAQs. Fuzzy-matches on question text.
@@ -464,7 +486,7 @@ def lookup_faq(query: str) -> str | None:
     """
     try:
         sb = _get_supabase()
-        faqs = sb.table("faqs").select("question, answer").eq("client_id", CLIENT_ID).eq("active", True).execute().data or []
+        faqs = sb.table("faqs").select("question, answer").eq("client_id", client_id).eq("active", True).execute().data or []
         if not faqs:
             return None
 
@@ -2159,7 +2181,8 @@ async def webhook_order(request: Request):
     except Exception:
         return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
     sb = _get_supabase()
-    result = record_order(sb, payload, CLIENT_ID)
+    webhook_cid = client_for(request)
+    result = record_order(sb, payload, webhook_cid)
     status = 200 if result.get("ok") else 400
     return JSONResponse(result, status_code=status)
 
@@ -2488,7 +2511,7 @@ async def embed_script():
   var btn=document.createElement('button');
   btn.id='tedpro-btn';btn.innerHTML='🧸';btn.title='Chat with us';
   var frame=document.createElement('iframe');
-  frame.id='tedpro-frame';frame.src='{base}/chat-widget';frame.allow='microphone';
+  frame.id='tedpro-frame';var _tc=(document.currentScript&&document.currentScript.src||'').split('client=')[1];_tc=_tc?_tc.split('&')[0]:'';frame.src='{base}/chat-widget'+(_tc?('?client='+encodeURIComponent(_tc)):'');frame.allow='microphone';
   var open=false;
   btn.onclick=function(){{
     open=!open;
@@ -2508,17 +2531,18 @@ async def embed_script():
 async def chat_widget(request: Request):
     """Cookieless widget — session via localStorage, works on every site/browser/security setting."""
     sid = request.query_params.get("sid", "")
+    widget_cid = client_for(request)
     if not sid:
         return HTMLResponse("""<!DOCTYPE html><html><head><meta charset="utf-8"><script>
 var s=localStorage.getItem('tpro_sid');
 if(!s){s='w'+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);localStorage.setItem('tpro_sid',s);}
-location.replace('/chat-widget?sid='+encodeURIComponent(s));
+var _cp=new URLSearchParams(location.search).get('client');location.replace('/chat-widget?sid='+encodeURIComponent(s)+(_cp?('&client='+encodeURIComponent(_cp)):''));
 </script></head><body></body></html>""")
 
     try:
         sb = _get_supabase()
         rows = sb.table("conversations").select("user_message,bot_response") \
-            .eq("session_id", sid).eq("client_id", CLIENT_ID) \
+            .eq("session_id", sid).eq("client_id", widget_cid) \
             .order("created_at", desc=False).limit(50).execute().data or []
     except Exception:
         rows = []
@@ -2572,6 +2596,7 @@ location.replace('/chat-widget?sid='+encodeURIComponent(s));
         "</div></div>"
         "<script>"
         "var SID='" + sid_js + "';"
+        "var CLIENT='" + widget_cid.replace("'","\\'") + "';"
         "function scroll(){var m=document.getElementById('msgs');m.scrollTop=m.scrollHeight;}"
         "scroll();"
         "function send(){"
@@ -2588,7 +2613,7 @@ location.replace('/chat-widget?sid='+encodeURIComponent(s));
         "  tb.style.cssText='display:flex;justify-content:flex-start;margin-bottom:8px';"
         "  tb.innerHTML='<div style=\"background:white;border:1px solid #FFE4CC;padding:10px 14px;border-radius:16px 16px 16px 4px;max-width:78%;font-size:13px;color:#2D1B00\">&#129528; ...</div>';"
         "  msgs.appendChild(tb);scroll();"
-        "  fetch('/widget-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:txt,sid:SID})})"
+        "  fetch('/widget-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:txt,sid:SID,client:CLIENT})})"
         "  .then(function(r){return r.json();})"
         "  .then(function(d){"
         "    var inner=tb.querySelector('div');"
@@ -2634,7 +2659,7 @@ location.replace('/chat-widget?sid='+encodeURIComponent(s));
         "  if(!email||email.indexOf('@')<0){msg.textContent='Please enter a valid email.';return;}"
         "  fetch('/widget-lead',{method:'POST',"
         "    headers:{'Content-Type':'application/json'},"
-        "    body:JSON.stringify({name:name,email:email,sid:SID})})"
+        "    body:JSON.stringify({name:name,email:email,sid:SID,client:CLIENT})})"
         "  .then(function(r){return r.json();})"
         "  .then(function(d){"
         "    window._tedLeadDone=true;"
@@ -2658,6 +2683,18 @@ async def widget_chat(request: Request):
         if not prompt or not sid:
             return JSONResponse({"response": "Something went wrong. Try again!"})
 
+        # Resolve which business this widget belongs to. The embed script carries
+        # ?client=<id>; the widget forwards it in the body as "client".
+        body_client = str(body.get("client", "")).strip()
+        if body_client:
+            try:
+                _sb_chk = _get_supabase()
+                cid = body_client if tenancy.account_exists(_sb_chk, body_client) else CLIENT_ID
+            except Exception:
+                cid = CLIENT_ID
+        else:
+            cid = client_for(request)
+
         if _is_gibberish(prompt):
             return JSONResponse({"response": "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, shipping, or custom orders. \U0001f9f8"})
 
@@ -2667,14 +2704,14 @@ async def widget_chat(request: Request):
         if any(kw in q_lower for kw in ORDER_STATUS_KEYWORDS):
             try:
                 sb_o = _get_supabase()
-                order_ans = lookup_order(sb_o, prompt, CLIENT_ID)
+                order_ans = lookup_order(sb_o, prompt, cid)
                 if order_ans:
-                    save_history_row(sid, prompt, order_ans)
+                    save_history_row(sid, prompt, order_ans, cid)
                     return JSONResponse({"response": order_ans})
                 # No match found — ask for the order number rather than hallucinate
                 ask = ("I couldn't find that order. Could you share your order number "
                        "(it's in your confirmation email), and I'll check the status for you?")
-                save_history_row(sid, prompt, ask)
+                save_history_row(sid, prompt, ask, cid)
                 return JSONResponse({"response": ask})
             except Exception as _oe:
                 logger.error(f"Order lookup error: {_oe}")
@@ -2687,15 +2724,15 @@ async def widget_chat(request: Request):
             "refund", "damaged", "faulty", "complaint",
         ]
         _skip_faq = any(s in q_lower for s in _SUPPORT)
-        faq_answer = None if _skip_faq else lookup_faq(prompt)
+        faq_answer = None if _skip_faq else lookup_faq(prompt, cid)
         if faq_answer:
-            save_history_row(sid, prompt, faq_answer)
+            save_history_row(sid, prompt, faq_answer, cid)
             return JSONResponse({"response": faq_answer})
 
         # 2. Handoff — clean message only, no AI
         if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
             handoff_msg = "I'll connect you with our team right away!"
-            save_history_row(sid, prompt, handoff_msg)
+            save_history_row(sid, prompt, handoff_msg, cid)
             return JSONResponse({
                 "response": handoff_msg,
                 "handoff": True,
@@ -2708,12 +2745,12 @@ async def widget_chat(request: Request):
             "ship", "deliver", "custom", "gift", "birthday",
             "available", "stock", "checkout", "add to cart",
         ]
-        history = load_history(sid)
+        history = load_history(sid, cid)
         has_intent = any(kw in q_lower for kw in LEAD_INTENT)
         msg_count = len(history)
         try:
             sb2 = _get_supabase()
-            existing_lead = sb2.table("leads").select("id").eq("context", f"widget_{sid}").execute().data
+            existing_lead = sb2.table("leads").select("id").eq("context", f"widget_{sid}").eq("client_id", cid).execute().data
             lead_captured = bool(existing_lead)
         except Exception:
             lead_captured = False
@@ -2727,7 +2764,7 @@ async def widget_chat(request: Request):
             sb3 = _get_supabase()
             all_prods = sb3.table("products").select(
                 "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
-            ).eq("client_id", CLIENT_ID).execute().data or []
+            ).eq("client_id", cid).execute().data or []
         except Exception as _fe:
             logger.error(f"Product fetch error: {_fe}")
             all_prods = []
@@ -2743,7 +2780,7 @@ async def widget_chat(request: Request):
                 direct = direct_price_answer(prompt, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
-                    save_history_row(sid, prompt, direct)
+                    save_history_row(sid, prompt, direct, cid)
                     _resp = {"response": direct}
                     if show_lead:
                         _resp["show_lead"] = True
@@ -2787,7 +2824,7 @@ async def widget_chat(request: Request):
                 lines.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({stk})")
             full = "Here's what we have: " + " • ".join(lines) + ". Which one would you like?"
 
-        save_history_row(sid, prompt, full)
+        save_history_row(sid, prompt, full, cid)
         resp = {"response": full}
         if show_lead:
             resp["show_lead"] = True
@@ -2805,9 +2842,15 @@ async def widget_lead(request: Request):
         name  = str(body.get("name", "")).strip()
         email = str(body.get("email", "")).strip()
         sid   = str(body.get("sid", "")).strip()
+        body_client = str(body.get("client", "")).strip()
         if not email or "@" not in email:
             return JSONResponse({"ok": False, "error": "Invalid email"})
-        saved = get_engine().add_lead(name, email, context=f"widget_{sid}")
+        try:
+            _sbc = _get_supabase()
+            lead_cid = body_client if (body_client and tenancy.account_exists(_sbc, body_client)) else CLIENT_ID
+        except Exception:
+            lead_cid = CLIENT_ID
+        saved = get_engine().add_lead(name, email, context=f"widget_{sid}", client_id=lead_cid)
         if saved:
             send_welcome_email(name, email)
         return JSONResponse({"ok": True})
