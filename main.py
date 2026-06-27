@@ -21,6 +21,7 @@ from hybrid_engine import HybridEngine
 from analytics import compute_metrics, render_dashboard
 from orders import record_order, lookup_order, order_metrics
 import tenancy
+import wizard
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -41,20 +42,30 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Engine — lazy init
 # ---------------------------------------------------------------------------
-_engine = None
+_engines: dict = {}          # per-client engine cache: {client_id: HybridEngine}
 _response_store: dict = {}
 
-def get_engine():
-    global _engine
-    if _engine is None:
+def get_engine(client_id: str = None):
+    """
+    Return the HybridEngine for a specific client, creating + caching it on
+    first use. Each tenant gets its own engine instance so its client_id (and
+    therefore its qa_cache) is fully isolated from other tenants.
+
+    Called with no argument → falls back to the legacy CLIENT_ID, preserving
+    the original single-client behaviour exactly.
+    """
+    cid = client_id or CLIENT_ID
+    eng = _engines.get(cid)
+    if eng is None:
         api_key = os.environ.get("OPENROUTER_API_KEY")
         sb_url  = os.environ.get("SUPABASE_URL")
         sb_key  = os.environ.get("SUPABASE_KEY")
         missing = [k for k, v in {"OPENROUTER_API_KEY": api_key, "SUPABASE_URL": sb_url, "SUPABASE_KEY": sb_key}.items() if not v]
         if missing:
             raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
-        _engine = HybridEngine(api_key=api_key, supabase_url=sb_url, supabase_key=sb_key, client_id=CLIENT_ID)
-    return _engine
+        eng = HybridEngine(api_key=api_key, supabase_url=sb_url, supabase_key=sb_key, client_id=cid)
+        _engines[cid] = eng
+    return eng
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -222,6 +233,11 @@ CLIENT_ID      = os.environ.get("CLIENT_ID", "tedpro_client")
 
 # Keep tenancy's legacy fallback in sync with this app's CLIENT_ID env value.
 tenancy.LEGACY_CLIENT_ID = CLIENT_ID
+
+def admin_client(request) -> str:
+    """The client_id for the logged-in admin. Falls back to legacy CLIENT_ID."""
+    return request.session.get("client_id") or CLIENT_ID
+
 
 def client_for(request) -> str:
     """
@@ -1055,10 +1071,11 @@ async def serve_admin_js():
 # FAQ CRUD endpoints — Supabase backed, full manager
 # ---------------------------------------------------------------------------
 
-def _build_faq_panel() -> str:
+def _build_faq_panel(client_id: str = None) -> str:
+    client_id = client_id or CLIENT_ID
     try:
         sb = _get_supabase()
-        faqs = sb.table("faqs").select("*").eq("client_id", CLIENT_ID)             .order("category").order("created_at").execute().data or []
+        faqs = sb.table("faqs").select("*").eq("client_id", client_id)             .order("category").order("created_at").execute().data or []
     except Exception as e:
         logger.error(f"FAQ fetch error: {e}")
         faqs = []
@@ -1291,12 +1308,12 @@ async def bulk_upload_faqs(request: Request, faq_file: str = Form(...)):
             if not q or not a:
                 skipped += 1
                 continue
-            existing = sb.table("faqs").select("id").eq("client_id", CLIENT_ID).eq("question", q).execute().data
+            existing = sb.table("faqs").select("id").eq("client_id", admin_client(request)).eq("question", q).execute().data
             if existing:
                 skipped += 1
                 continue
             sb.table("faqs").insert({
-                "client_id": CLIENT_ID,
+                "client_id": admin_client(request),
                 "question":  q,
                 "answer":    a,
                 "category":  cat,
@@ -1322,7 +1339,7 @@ async def add_faq(request: Request, question: str = Form(...), answer: str = For
     try:
         sb = _get_supabase()
         result = sb.table("faqs").insert({
-            "client_id": CLIENT_ID,
+            "client_id": admin_client(request),
             "question":  question.strip(),
             "answer":    answer.strip(),
             "category":  category.strip() or "General",
@@ -1923,7 +1940,7 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
                 stock_quantity = 0
 
             products.append({
-                "client_id":      CLIENT_ID,
+                "client_id":      admin_client(request),
                 "name":           sv(r.get("name")),
                 "category":       sv(r.get("category")),
                 "price":          price,
@@ -1938,7 +1955,7 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
             })
 
         # Fetch existing IDs first — insert new, then delete old safely
-        existing = sb.table("products").select("id").eq("client_id", CLIENT_ID).execute().data or []
+        existing = sb.table("products").select("id").eq("client_id", admin_client(request)).execute().data or []
         existing_ids = [row["id"] for row in existing]
         sb.table("products").insert(products).execute()
         if existing_ids:
@@ -1984,7 +2001,7 @@ async def conversations_rows(request: Request):
         return HTMLResponse("Not authenticated", status_code=401)
     try:
         sb = _get_supabase()
-        convs = sb.table("conversations").select("*").eq("client_id", CLIENT_ID).order("created_at", desc=True).limit(50).execute().data or []
+        convs = sb.table("conversations").select("*").eq("client_id", admin_client(request)).order("created_at", desc=True).limit(50).execute().data or []
         if not convs:
             return HTMLResponse('<tr><td colspan="4" class="px-4 py-4 text-sm text-center text-[#8B6914]">No conversations yet</td></tr>')
         parts = []
@@ -2014,8 +2031,9 @@ async def admin_data(request: Request):
     try:
         sb = _get_supabase()
         E = _esc_html
-        leads = sb.table("leads").select("*").order("timestamp", desc=True).limit(100).execute().data or []
-        convs = sb.table("conversations").select("*").eq("client_id", CLIENT_ID).order("created_at", desc=True).limit(100).execute().data or []
+        acid = admin_client(request)
+        leads = sb.table("leads").select("*").eq("client_id", acid).order("timestamp", desc=True).limit(100).execute().data or []
+        convs = sb.table("conversations").select("*").eq("client_id", acid).order("created_at", desc=True).limit(100).execute().data or []
 
         h = ["<!DOCTYPE html><html><head><meta charset='utf-8'><title>TedPro Data</title>",
              "<style>body{font-family:sans-serif;background:#FFF9F4;color:#2D1B00;padding:24px}",
@@ -2052,7 +2070,7 @@ async def view_conversation(request: Request, session_id: str):
         return HTMLResponse("Not authenticated", status_code=401)
     try:
         sb = _get_supabase()
-        rows = sb.table("conversations").select("user_message,bot_response,created_at")             .eq("session_id", session_id).eq("client_id", CLIENT_ID)             .order("created_at", desc=False).limit(100).execute().data or []
+        rows = sb.table("conversations").select("user_message,bot_response,created_at")             .eq("session_id", session_id).eq("client_id", admin_client(request))             .order("created_at", desc=False).limit(100).execute().data or []
         E = _esc_html
         bubbles = []
         for r in rows:
@@ -2116,7 +2134,7 @@ async def export_conversations(request: Request):
         import io, csv as csv_mod
         from fastapi.responses import Response
         sb = _get_supabase()
-        rows = sb.table("conversations").select("*").eq("client_id", CLIENT_ID)             .order("created_at", desc=True).execute().data or []
+        rows = sb.table("conversations").select("*").eq("client_id", admin_client(request))             .order("created_at", desc=True).execute().data or []
         output = io.StringIO()
         writer = csv_mod.writer(output)
         writer.writerow(["date", "session_id", "user_message", "bot_response"])
@@ -2151,8 +2169,25 @@ async def admin_reverify(request: Request, password: str = Form(...)):
 
 @app.post("/admin/login", response_class=HTMLResponse)
 async def admin_login(request: Request, password: str = Form(...)):
+    # Multi-tenant login: a ?client= param means a specific account is logging in
+    # with their own password. No param → legacy global ADMIN_PASSWORD (CuddleHeros).
+    cid = request.query_params.get("client", "") or request.session.get("pending_client", "")
+    if cid:
+        try:
+            sb = _get_supabase()
+            acct = tenancy.get_account(sb, cid)
+            if acct and tenancy.verify_password(password, acct.get("admin_password_hash", "")):
+                request.session["admin_authenticated"] = True
+                request.session["client_id"] = cid
+                return RedirectResponse(url="/admin", status_code=303)
+        except Exception as e:
+            logger.error(f"per-client login error: {e}")
+        return HTMLResponse(content=render_page("Admin Login",
+            _login_page("\U0001f512", "Admin Access", f"/admin/login?client={cid}", "Incorrect password."), include_admin_js=True))
+    # Legacy global admin
     if password == ADMIN_PASSWORD:
         request.session["admin_authenticated"] = True
+        request.session["client_id"] = CLIENT_ID
         return RedirectResponse(url="/admin", status_code=303)
     return HTMLResponse(content=render_page("Admin Login",
         _login_page("\U0001f512", "Admin Access", "/admin/login", "Incorrect password."), include_admin_js=True))
@@ -2240,9 +2275,11 @@ async def admin_impact(request: Request):
         return RedirectResponse(url="/admin", status_code=303)
     try:
         sb = _get_supabase()
-        biz = os.environ.get("BUSINESS_NAME", "Your Business")
-        metrics = compute_metrics(sb, CLIENT_ID, days=30)
-        ometrics = order_metrics(sb, CLIENT_ID, days=30)
+        acid = admin_client(request)
+        brand = tenancy.account_branding(sb, acid)
+        biz = brand.get("business_name", "Your Business")
+        metrics = compute_metrics(sb, acid, days=30)
+        ometrics = order_metrics(sb, acid, days=30)
         panel = render_dashboard(metrics, biz, order_metrics=ometrics)
         content = (
             "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-5xl mx-auto'>"
@@ -2261,16 +2298,17 @@ async def admin_impact(request: Request):
 async def _admin_dashboard(request: Request):
     try:
         sb = _get_supabase()
+        acid = admin_client(request)
 
-        leads_data    = sb.table("leads").select("*").order("timestamp", desc=True).limit(50).execute().data or []
-        convs_data    = sb.table("conversations").select("*").eq("client_id", CLIENT_ID).order("created_at", desc=True).limit(50).execute().data or []
-        products_data = sb.table("products").select("*").order("name").execute().data or []
-        leads_count    = len(sb.table("leads").select("id").execute().data or [])
-        conv_count     = len(sb.table("conversations").select("id").execute().data or [])
-        products_count = len(sb.table("products").select("id").execute().data or [])
-        faqs_count     = len(sb.table("faqs").select("id").eq("client_id", CLIENT_ID).execute().data or [])
+        leads_data    = sb.table("leads").select("*").eq("client_id", acid).order("timestamp", desc=True).limit(50).execute().data or []
+        convs_data    = sb.table("conversations").select("*").eq("client_id", acid).order("created_at", desc=True).limit(50).execute().data or []
+        products_data = sb.table("products").select("*").eq("client_id", acid).order("name").execute().data or []
+        leads_count    = len(sb.table("leads").select("id").eq("client_id", acid).execute().data or [])
+        conv_count     = len(sb.table("conversations").select("id").eq("client_id", acid).execute().data or [])
+        products_count = len(sb.table("products").select("id").eq("client_id", acid).execute().data or [])
+        faqs_count     = len(sb.table("faqs").select("id").eq("client_id", acid).execute().data or [])
         today          = datetime.now().date().isoformat()
-        today_leads    = len(sb.table("leads").select("id").gte("timestamp", today).execute().data or [])
+        today_leads    = len(sb.table("leads").select("id").eq("client_id", acid).gte("timestamp", today).execute().data or [])
 
         E = _esc_html
 
@@ -2411,7 +2449,7 @@ async def _admin_dashboard(request: Request):
             + "<div style='margin-top:1.5rem'>"
             + "<div id='panel-leads' style='display:block'>" + leads_panel + "</div>"
             + "<div id='panel-products' style='display:none'>" + products_panel + "</div>"
-            + "<div id='panel-faqs' style='display:none'>" + _build_faq_panel() + "</div>"
+            + "<div id='panel-faqs' style='display:none'>" + _build_faq_panel(acid) + "</div>"
             + "<div id='panel-conversations' style='display:none'>" + convs_panel + "</div>"
             + "</div>"
             + tab_js
@@ -2498,6 +2536,136 @@ async def _dev_dashboard(request: Request):
 # ---------------------------------------------------------------------------
 # Embed script — one line of HTML that any website can drop in
 # ---------------------------------------------------------------------------
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_wizard(request: Request):
+    """The self-serve onboarding wizard. Step controlled by ?step= param."""
+    step = int(request.query_params.get("step", "1") or "1")
+    cid = request.query_params.get("client", "")
+    base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
+    account = {}
+    if cid:
+        try:
+            sb = _get_supabase()
+            account = tenancy.get_account(sb, cid) or {"client_id": cid}
+        except Exception:
+            account = {"client_id": cid}
+    return HTMLResponse(wizard.render_wizard(base, step=step, account=account))
+
+
+@app.post("/setup/step1", response_class=HTMLResponse)
+async def setup_step1(request: Request, business_name: str = Form(...),
+                      admin_password: str = Form(...), business_type: str = Form("")):
+    """Create the account, then advance to branding."""
+    base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
+    sb = _get_supabase()
+    cid = wizard.suggest_client_id(business_name)
+    # Ensure uniqueness — append a number if taken
+    original = cid
+    n = 2
+    while tenancy.account_exists(sb, cid):
+        cid = f"{original}{n}"
+        n += 1
+    result = tenancy.create_account(
+        sb, cid, business_name, admin_password=admin_password,
+        business_type=business_type,
+    )
+    if not result.get("ok"):
+        return HTMLResponse(wizard.render_wizard(base, step=1, error=result.get("error", "Could not create account")))
+    # Log them in to their new account
+    request.session["admin_authenticated"] = True
+    request.session["client_id"] = cid
+    return RedirectResponse(url=f"/setup?step=2&client={cid}", status_code=303)
+
+
+@app.post("/setup/step2", response_class=HTMLResponse)
+async def setup_step2(request: Request, client_id: str = Form(...),
+                      shop_url: str = Form(""), whatsapp_number: str = Form(""),
+                      voucher_code: str = Form(""), primary_color: str = Form("#FF922B")):
+    """Save branding, advance to products."""
+    sb = _get_supabase()
+    tenancy.update_account(sb, client_id, shop_url=shop_url,
+                           whatsapp_number=whatsapp_number, voucher_code=voucher_code,
+                           primary_color=primary_color)
+    return RedirectResponse(url=f"/setup?step=3&client={client_id}", status_code=303)
+
+
+@app.post("/setup/upload-products", response_class=HTMLResponse)
+async def setup_upload_products(request: Request, csv_data: str = Form(...),
+                                client_id: str = Form(...)):
+    """Upload products scoped to the new client (reuses the CSV parse logic)."""
+    if not request.session.get("admin_authenticated"):
+        return HTMLResponse("<span style='color:#991b1b'>Session expired</span>", status_code=401)
+    try:
+        import io, csv as csv_mod
+        sb = _get_supabase()
+        reader = csv_mod.DictReader(io.StringIO(csv_data.strip()))
+        rows = list(reader)
+        if not rows:
+            return HTMLResponse("<span style='color:#991b1b'>CSV is empty</span>")
+        if not {"name", "price"}.issubset({c.lower().strip() for c in rows[0].keys()}):
+            return HTMLResponse("<span style='color:#991b1b'>CSV needs at least: name, price</span>")
+
+        def sv(val, default=""):
+            v = val if val is not None else default
+            return str(v).strip() if str(v).strip() else str(default).strip()
+
+        products = []
+        for row in rows:
+            r = {k.lower().strip(): v for k, v in row.items()}
+            try:
+                price = float(sv(r.get("price"), "0") or "0")
+            except (ValueError, TypeError):
+                price = 0.0
+            try:
+                size_cm = int(float(sv(r.get("size_cm"), "0") or "0"))
+            except (ValueError, TypeError):
+                size_cm = 0
+            try:
+                stock_quantity = int(float(sv(r.get("stock_quantity"), "0") or "0"))
+            except (ValueError, TypeError):
+                stock_quantity = 0
+            products.append({
+                "client_id": client_id,
+                "name": sv(r.get("name")),
+                "category": sv(r.get("category")),
+                "price": price,
+                "currency": sv(r.get("currency"), "ZAR"),
+                "in_stock": sv(r.get("in_stock"), "true").lower() not in ("false", "0", "no"),
+                "description": sv(r.get("description")),
+                "material": sv(r.get("material")),
+                "size_cm": size_cm,
+                "customisable": sv(r.get("customisable"), "false").lower() in ("true", "1", "yes"),
+                "sku": sv(r.get("sku")),
+                "stock_quantity": stock_quantity,
+            })
+        sb.table("products").insert(products).execute()
+        return HTMLResponse(f"<span style='color:#166534'>✅ {len(products)} products added!</span>")
+    except Exception as e:
+        logger.error(f"setup product upload error: {e}")
+        return HTMLResponse(f"<span style='color:#991b1b'>Error: {e}</span>")
+
+
+@app.post("/setup/add-faq")
+async def setup_add_faq(request: Request, question: str = Form(...),
+                        answer: str = Form(...), client_id: str = Form(...)):
+    """Add a single FAQ scoped to the new client."""
+    if not request.session.get("admin_authenticated"):
+        return JSONResponse({"ok": False, "error": "Session expired"})
+    try:
+        sb = _get_supabase()
+        sb.table("faqs").insert({
+            "client_id": client_id,
+            "question": question.strip(),
+            "answer": answer.strip(),
+            "category": "General",
+            "active": True,
+        }).execute()
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error(f"setup add faq error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
 @app.get("/embed.js")
 async def embed_script():
     from fastapi.responses import Response
@@ -2811,7 +2979,7 @@ async def widget_chat(request: Request):
 
         # 5. AI response
         history.append({"role": "user", "content": prompt})
-        full = "".join(get_engine().stream_answer(enhanced, chat_history=history))
+        full = "".join(get_engine(cid).stream_answer(enhanced, chat_history=history))
         full = _strip_urls(full)
 
         # Hallucination guard: if AI invented product names, replace with real list
@@ -2850,7 +3018,7 @@ async def widget_lead(request: Request):
             lead_cid = body_client if (body_client and tenancy.account_exists(_sbc, body_client)) else CLIENT_ID
         except Exception:
             lead_cid = CLIENT_ID
-        saved = get_engine().add_lead(name, email, context=f"widget_{sid}", client_id=lead_cid)
+        saved = get_engine(lead_cid).add_lead(name, email, context=f"widget_{sid}", client_id=lead_cid)
         if saved:
             send_welcome_email(name, email)
         return JSONResponse({"ok": True})
