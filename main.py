@@ -234,9 +234,17 @@ CLIENT_ID      = os.environ.get("CLIENT_ID", "tedpro_client")
 # Keep tenancy's legacy fallback in sync with this app's CLIENT_ID env value.
 tenancy.LEGACY_CLIENT_ID = CLIENT_ID
 
-def admin_client(request) -> str:
-    """The client_id for the logged-in admin. Falls back to legacy CLIENT_ID."""
-    return request.session.get("client_id") or CLIENT_ID
+def admin_client(request) -> str | None:
+    """
+    The client_id for the currently logged-in admin — strictly from the session,
+    set at login time against the account they authenticated against. Returns
+    None if not authenticated. NEVER falls back to a global client, because in a
+    multi-tenant app "unclear identity" must mean "see nothing", not "see the
+    default business".
+    """
+    if not request.session.get("admin_authenticated"):
+        return None
+    return request.session.get("client_id")
 
 
 def client_for(request) -> str:
@@ -1992,9 +2000,21 @@ async def download_template(request: Request):
 # ---------------------------------------------------------------------------
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
-    if not request.session.get("admin_authenticated"):
-        # Carry the client through so the login form knows which business is signing in.
-        cid = request.query_params.get("client", "")
+    url_client = request.query_params.get("client", "")
+    session_client = request.session.get("client_id", "")
+    authed = request.session.get("admin_authenticated", False)
+
+    # If the URL asks for a specific client that is NOT who this session is logged
+    # in as, we must NOT show the session's data under that URL. Log them out of
+    # the mismatched view and require authentication for the requested client.
+    if authed and url_client and url_client != session_client:
+        request.session.pop("admin_authenticated", None)
+        request.session.pop("client_id", None)
+        authed = False
+
+    if not authed:
+        # Show a login form bound to the requested client (or generic/legacy).
+        cid = url_client
         title = "Admin Access"
         action = "/admin/login"
         if cid:
@@ -2004,6 +2024,9 @@ async def admin_page(request: Request):
                 if acct:
                     title = acct.get("business_name", "Admin Access")
                     action = f"/admin/login?client={cid}"
+                else:
+                    # Requested client doesn't exist — don't leak, show generic login
+                    action = "/admin/login"
             except Exception:
                 pass
         return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", title, action), include_admin_js=True))
@@ -2194,7 +2217,7 @@ async def admin_login(request: Request, password: str = Form(...)):
             if acct and tenancy.verify_password(password, acct.get("admin_password_hash", "")):
                 request.session["admin_authenticated"] = True
                 request.session["client_id"] = cid
-                return RedirectResponse(url="/admin", status_code=303)
+                return RedirectResponse(url=f"/admin?client={cid}", status_code=303)
         except Exception as e:
             logger.error(f"per-client login error: {e}")
         return HTMLResponse(content=render_page("Admin Login",
@@ -2318,8 +2341,11 @@ async def admin_impact(request: Request):
 
 async def _admin_dashboard(request: Request):
     try:
-        sb = _get_supabase()
         acid = admin_client(request)
+        if not acid:
+            # Not authenticated to any client — never fall through to a default.
+            return RedirectResponse(url="/admin", status_code=303)
+        sb = _get_supabase()
 
         leads_data    = sb.table("leads").select("*").eq("client_id", acid).order("timestamp", desc=True).limit(50).execute().data or []
         convs_data    = sb.table("conversations").select("*").eq("client_id", acid).order("created_at", desc=True).limit(50).execute().data or []
