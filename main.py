@@ -30,9 +30,19 @@ limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(title="TedPro Assistant", version="2.1.0")
 app.state.limiter = limiter
+_SECRET_KEY = os.environ.get("SECRET_KEY")
+if not _SECRET_KEY:
+    # No hardcoded fallback — a known key in a public repo means anyone could
+    # forge admin sessions. Generate an ephemeral one so the app still boots,
+    # but log loudly. Sessions won't survive a restart until SECRET_KEY is set.
+    import secrets as _secrets_boot
+    _SECRET_KEY = _secrets_boot.token_urlsafe(48)
+    logger.error("SECRET_KEY env var is NOT set — using an ephemeral key. "
+                 "Set SECRET_KEY in your environment for stable, secure sessions.")
+
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ.get("SECRET_KEY", "tedpro-fallback-secret"),
+    secret_key=_SECRET_KEY,
     same_site="none",
     https_only=True,
 )
@@ -138,30 +148,40 @@ def maybe_add_shop_cta(query: str, response: str) -> str:
         return response + cta
     return response
 
-def send_welcome_email(name: str, email: str) -> bool:
+def send_welcome_email(name: str, email: str, branding: dict = None) -> bool:
     try:
         gmail_user     = os.environ.get("GMAIL_USER")
         gmail_password = os.environ.get("GMAIL_APP_PASSWORD")
         if not gmail_user or not gmail_password:
             logger.error("Missing Gmail credentials")
             return False
+        b = branding or {}
+        biz = b.get("business_name") or "CuddleHeros"
+        voucher = b.get("voucher_code") or "TEDDY10"
+        shop = b.get("shop_url") or "https://cuddleheros.co.za"
+        color = b.get("primary_color") or "#FF922B"
         greeting = name if name and name.strip() else "Friend"
+        # Only show the voucher block if the client actually has a voucher code
+        voucher_block = ""
+        if voucher:
+            voucher_block = (
+                f'<div style="background:#FFE4CC;padding:20px;border-radius:12px;text-align:center;margin:20px 0;">'
+                f'<p style="color:#8B6914;text-transform:uppercase;letter-spacing:2px;">Your Exclusive Voucher</p>'
+                f'<h2 style="color:{color};font-size:36px;">{voucher}</h2>'
+                f'<p style="color:#8B6914;">10% OFF your first order \u2022 Valid 30 days</p></div>'
+            )
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "Welcome to the CuddleHeros VIP Club \U0001f9f8"
-        msg["From"]    = f"Teddy at CuddleHeros <{gmail_user}>"
+        msg["Subject"] = f"Welcome to {biz} \U0001f9f8"
+        msg["From"]    = f"{biz} <{gmail_user}>"
         msg["To"]      = email
         html = f"""<html><body style="font-family:sans-serif;background:#FFF9F4;padding:20px;">
 <div style="max-width:600px;margin:0 auto;background:white;padding:30px;border-radius:20px;">
 <div style="text-align:center;font-size:60px;">\U0001f9f8</div>
 <h1 style="color:#2D1B00;">Welcome {greeting}!</h1>
-<p style="color:#5A3A1B;">Thanks for joining the Honey-Pot!</p>
-<div style="background:#FFE4CC;padding:20px;border-radius:12px;text-align:center;margin:20px 0;">
-<p style="color:#8B6914;text-transform:uppercase;letter-spacing:2px;">Your Exclusive Voucher</p>
-<h2 style="color:#FF922B;font-size:36px;">TEDDY10</h2>
-<p style="color:#8B6914;">10% OFF your first order \u2022 Valid 30 days</p>
-</div>
-<a href="https://cuddleheros.co.za" style="display:inline-block;background:#FF922B;color:white;padding:16px 40px;border-radius:30px;text-decoration:none;font-weight:600;">Shop the Catalog</a>
-<p style="margin-top:30px;color:#8B6914;">Paws and hugs,<br><strong>Teddy \U0001f9f8</strong></p>
+<p style="color:#5A3A1B;">Thanks for joining {biz}!</p>
+{voucher_block}
+<a href="{shop}" style="display:inline-block;background:{color};color:white;padding:16px 40px;border-radius:30px;text-decoration:none;font-weight:600;">Shop Now</a>
+<p style="margin-top:30px;color:#8B6914;">Warm wishes,<br><strong>{biz}</strong></p>
 </div></body></html>"""
         msg.attach(MIMEText(html, "html"))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
@@ -172,6 +192,33 @@ def send_welcome_email(name: str, email: str) -> bool:
     except Exception as e:
         logger.error(f"Email failed: {e}")
         return False
+
+# --- Usage tracking (FIX #7) ---
+# Buffer per-client message counts in memory; flush to the accounts table
+# periodically so we're not doing a DB round-trip on every single message.
+_usage_buffer: dict = {}
+_USAGE_FLUSH_AT = 10  # flush a client's count once it reaches this many buffered
+
+def increment_usage(client_id: str):
+    if not client_id:
+        return
+    _usage_buffer[client_id] = _usage_buffer.get(client_id, 0) + 1
+    if _usage_buffer[client_id] >= _USAGE_FLUSH_AT:
+        _flush_usage(client_id)
+
+def _flush_usage(client_id: str):
+    count = _usage_buffer.get(client_id, 0)
+    if count <= 0:
+        return
+    try:
+        sb = _get_supabase()
+        acct = sb.table("accounts").select("msgs_used").eq("client_id", client_id).limit(1).execute().data
+        current = (acct[0].get("msgs_used") or 0) if acct else 0
+        sb.table("accounts").update({"msgs_used": current + count}).eq("client_id", client_id).execute()
+        _usage_buffer[client_id] = 0
+    except Exception as e:
+        logger.warning(f"_flush_usage({client_id}): {e}")
+
 
 def _get_supabase():
     from supabase import create_client
@@ -658,6 +705,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    if "/widget-chat" in str(request.url):
+        return JSONResponse(
+            {"response": "You're sending messages very quickly! Give me a few "
+                         "seconds and try again. \U0001f9f8"},
+            status_code=200
+        )
     if "/chat/response" in str(request.url):
         t = (datetime.now() + timedelta(hours=LOCAL_OFFSET_HOURS)).strftime("%H:%M")
         return HTMLResponse(
@@ -1791,7 +1844,11 @@ async def capture_lead(request: Request, lead_name: str = Form(""), lead_email: 
         saved = get_engine().add_lead(lead_name, lead_email, context="main_chat_v5")
         if saved:
             request.session["lead_captured"] = True
-            email_ok = send_welcome_email(lead_name, lead_email)
+            try:
+                _brand = tenancy.account_branding(_get_supabase(), CLIENT_ID)
+            except Exception:
+                _brand = None
+            email_ok = send_welcome_email(lead_name, lead_email, _brand)
             if email_ok:
                 return HTMLResponse(
                     '<p class="text-green-600 font-semibold p-3 text-sm">'
@@ -2251,16 +2308,29 @@ async def webhook_order(request: Request):
     passed either as ?secret=... or an X-Webhook-Secret header. This keeps the
     endpoint open to platforms (which can't log in) while blocking the public.
     """
-    secret_env = os.environ.get("WEBHOOK_SECRET", "")
     provided = request.query_params.get("secret") or request.headers.get("x-webhook-secret", "")
-    if not secret_env or provided != secret_env:
+    if not provided:
         return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+
+    sb = _get_supabase()
+    # Per-client secret: the secret itself identifies which account the order is
+    # for. This means one client's secret can never post orders as another.
+    webhook_cid = tenancy.client_for_webhook_secret(sb, provided)
+
+    # Legacy fallback: the old global WEBHOOK_SECRET still works for CuddleHeros
+    # during the transition.
+    if not webhook_cid:
+        legacy_secret = os.environ.get("WEBHOOK_SECRET", "")
+        if legacy_secret and provided == legacy_secret:
+            webhook_cid = CLIENT_ID
+
+    if not webhook_cid:
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+
     try:
         payload = await request.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
-    sb = _get_supabase()
-    webhook_cid = client_for(request)
     result = record_order(sb, payload, webhook_cid)
     status = 200 if result.get("ok") else 400
     return JSONResponse(result, status_code=status)
@@ -2747,6 +2817,13 @@ async def chat_widget(request: Request):
     """Cookieless widget — session via localStorage, works on every site/browser/security setting."""
     sid = request.query_params.get("sid", "")
     widget_cid = client_for(request)
+    # Per-account branding so each client's widget shows THEIR business, not CuddleHeros.
+    try:
+        _brand = tenancy.account_branding(_get_supabase(), widget_cid)
+    except Exception:
+        _brand = {"business_name": "our shop", "primary_color": "#FF922B"}
+    _biz_name = _esc_html(_brand.get("business_name") or "our shop")
+    _biz_color = _brand.get("primary_color") or "#FF922B"
     if not sid:
         return HTMLResponse("""<!DOCTYPE html><html><head><meta charset="utf-8"><script>
 var s=localStorage.getItem('tpro_sid');
@@ -2780,7 +2857,7 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
     if not history_html:
         history_html = (
             "<div style='text-align:center;padding:20px;color:#8B6914;font-size:13px'>"
-            "&#128075; Hi! Ask me anything about CuddleHeros plushies!</div>"
+            "&#128075; Hi! Ask me anything about " + _biz_name + "!</div>"
         )
 
     sid_js = sid.replace("'", "\\'")
@@ -2803,7 +2880,7 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
         "<div style='background:linear-gradient(135deg,#FF922B,#FF8C42);color:white;padding:12px 16px;text-align:center;flex-shrink:0'>"
         "<div style='font-size:20px'>&#129528;</div>"
         "<div style='font-weight:700;font-size:14px'>Teddy</div>"
-        "<div style='font-size:11px;opacity:.85'>Your CuddleHeros Assistant</div></div>"
+        "<div style='font-size:11px;opacity:.85'>" + _biz_name + " Assistant</div></div>"
         "<div id='msgs'>" + history_html + "</div>"
         "<div id='footer'><div id='row'>"
         "<input id='inp' type='text' placeholder='Ask Teddy...' autocomplete='off'>"
@@ -2879,7 +2956,7 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
         "  .then(function(d){"
         "    window._tedLeadDone=true;"
         "    var lf=document.getElementById('widget-lead-form');"
-        "    if(lf)lf.innerHTML='<p style=\"color:#166534;font-weight:700;font-size:13px;text-align:center;margin:0\">&#9989; You are in! Your <b>TEDDY10</b> code is on its way to your inbox \u2014 10% off your first order.</p>';"
+        "    if(lf)lf.innerHTML='<p style=\"color:#166534;font-weight:700;font-size:13px;text-align:center;margin:0\">&#9989; You are in! Your discount code is on its way to your inbox.</p>';"
         "    scroll();"
         "  }).catch(function(){if(msg)msg.textContent='Something went wrong, try again.';});"
         "}"
@@ -2889,6 +2966,7 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
 
 
 @app.post("/widget-chat")
+@limiter.limit("30/minute")
 async def widget_chat(request: Request):
     """Cookieless JSON chat endpoint for the embed widget."""
     try:
@@ -2909,6 +2987,22 @@ async def widget_chat(request: Request):
                 cid = CLIENT_ID
         else:
             cid = client_for(request)
+
+        # FIX #6: suspended/cancelled accounts stop serving (billing enforcement).
+        # Legacy client (CuddleHeros) is never suspended via this path.
+        if cid != CLIENT_ID:
+            try:
+                _acct = tenancy.get_account(_get_supabase(), cid)
+                if _acct and _acct.get("account_status") in ("suspended", "cancelled"):
+                    return JSONResponse({"response": "This assistant is currently unavailable. Please contact the business directly."})
+            except Exception:
+                pass
+
+        # FIX #7: count this message against the client's usage (fire-and-forget).
+        try:
+            increment_usage(cid)
+        except Exception:
+            pass
 
         if _is_gibberish(prompt):
             return JSONResponse({"response": "Hmm, I didn't quite catch that! Try asking me about our plushies, pricing, shipping, or custom orders. \U0001f9f8"})
@@ -2944,15 +3038,19 @@ async def widget_chat(request: Request):
             save_history_row(sid, prompt, faq_answer, cid)
             return JSONResponse({"response": faq_answer})
 
-        # 2. Handoff — clean message only, no AI
+        # 2. Handoff — clean message only, no AI. Uses the client's own WhatsApp.
         if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
             handoff_msg = "I'll connect you with our team right away!"
             save_history_row(sid, prompt, handoff_msg, cid)
-            return JSONResponse({
-                "response": handoff_msg,
-                "handoff": True,
-                "whatsapp": "https://wa.me/27836205614?text=Hi%20CuddleHeros%2C%20I%20need%20help%20%F0%9F%A7%B8"
-            })
+            resp = {"response": handoff_msg, "handoff": True}
+            try:
+                _b = tenancy.account_branding(_get_supabase(), cid)
+                _wa = (_b.get("whatsapp_number") or "").strip()
+                if _wa:
+                    resp["whatsapp"] = f"https://wa.me/{_wa}"
+            except Exception:
+                pass
+            return JSONResponse(resp)
 
         # 3. Lead capture check
         LEAD_INTENT = [
@@ -3073,7 +3171,11 @@ async def widget_lead(request: Request):
             lead_cid = CLIENT_ID
         saved = get_engine(lead_cid).add_lead(name, email, context=f"widget_{sid}", client_id=lead_cid)
         if saved:
-            send_welcome_email(name, email)
+            try:
+                _brand = tenancy.account_branding(_sbc, lead_cid)
+            except Exception:
+                _brand = None
+            send_welcome_email(name, email, _brand)
         return JSONResponse({"ok": True})
     except Exception as e:
         logger.error(f"widget_lead error: {e}")
