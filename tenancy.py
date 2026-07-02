@@ -28,18 +28,45 @@ _known_clients: set[str] = set()
 _cache_loaded = False
 
 
+import os as _os
+import hmac as _hmac
+
+# PBKDF2-HMAC-SHA256 with a per-hash random salt. Format stored as:
+#   pbkdf2$<iterations>$<salt_hex>$<hash_hex>
+# This is a real salted, slow KDF — resistant to rainbow tables and much slower
+# to brute-force than plain SHA-256. Uses only the Python standard library.
+_PBKDF2_ITERATIONS = 200_000
+
+
 def _hash_password(password: str) -> str:
-    """Hash an admin password for storage. Salted with the client_id so the same
-    password for two clients produces different hashes."""
+    """Hash a password with a random per-hash salt using PBKDF2-HMAC-SHA256."""
     if not password:
         return ""
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    salt = _os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS)
+    return f"pbkdf2${_PBKDF2_ITERATIONS}${salt.hex()}${dk.hex()}"
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
-    if not stored_hash:
+    """
+    Verify a password against a stored hash. Supports the new PBKDF2 format and,
+    for backward compatibility, the legacy plain-SHA256 format so existing
+    accounts keep working (they upgrade to PBKDF2 next time the password is set).
+    """
+    if not stored_hash or not password:
         return False
-    return _hash_password(password) == stored_hash
+    # New PBKDF2 format
+    if stored_hash.startswith("pbkdf2$"):
+        try:
+            _, iters, salt_hex, hash_hex = stored_hash.split("$")
+            dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                     bytes.fromhex(salt_hex), int(iters))
+            return _hmac.compare_digest(dk.hex(), hash_hex)
+        except (ValueError, TypeError):
+            return False
+    # Legacy plain-SHA256 format — constant-time compare
+    legacy = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return _hmac.compare_digest(legacy, stored_hash)
 
 
 def load_known_clients(supabase) -> set[str]:
@@ -121,6 +148,20 @@ def resolve_client_id(request, supabase=None) -> str | None:
     return None
 
 
+def client_for_webhook_secret(supabase, secret: str) -> str | None:
+    """Return the client_id whose webhook_secret matches, or None. Lets each
+    client have their own secret instead of one global shared one."""
+    if not secret:
+        return None
+    try:
+        rows = (supabase.table("accounts").select("client_id, webhook_secret")
+                .eq("webhook_secret", secret).limit(1).execute().data)
+        return rows[0]["client_id"] if rows else None
+    except Exception as e:
+        logger.warning(f"client_for_webhook_secret: {e}")
+        return None
+
+
 def get_account(supabase, client_id: str) -> dict | None:
     """Fetch the full account row for a client. Returns None if not found."""
     if not client_id:
@@ -153,6 +194,7 @@ def account_branding(supabase, client_id: str) -> dict:
             "logo_url": acct.get("logo_url") or "",
             "plan": acct.get("plan") or "trial",
             "account_status": acct.get("account_status") or "active",
+            "webhook_secret": acct.get("webhook_secret") or "",
         }
     # Legacy fallback — read from env like the original app did
     return {
@@ -185,6 +227,7 @@ def create_account(supabase, client_id: str, business_name: str,
     if account_exists(supabase, cid):
         return {"ok": False, "error": f"An account with ID '{cid}' already exists"}
 
+    import secrets as _secrets
     row = {
         "client_id": cid,
         "business_name": business_name.strip(),
@@ -194,6 +237,7 @@ def create_account(supabase, client_id: str, business_name: str,
         "voucher_code": fields.get("voucher_code", ""),
         "primary_color": fields.get("primary_color", "#FF922B"),
         "logo_url": fields.get("logo_url", ""),
+        "webhook_secret": _secrets.token_urlsafe(32),
         "admin_password_hash": _hash_password(admin_password) if admin_password else "",
         # billing-ready defaults — present now, enforced later
         "plan": "trial",
