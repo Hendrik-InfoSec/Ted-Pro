@@ -12,3 +12,10 @@ services:
         value: "3.11.0"
       - key: SECRET_KEY
         generateValue: true
+      # Pinned to 1 worker: the main-page chat uses an in-process store to hand
+      # off between the POST and the polling GET. Multiple workers would split
+      # that state and break it. The embeddable widget is stateless and fine at
+      # any scale; only the legacy storefront chat has this constraint. Revisit
+      # (move handoff to DB/Redis) before increasing this.
+      - key: WEB_CONCURRENCY
+        value: "1"
