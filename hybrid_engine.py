@@ -67,8 +67,7 @@ class HybridEngine:
             # Never cache product/price answers — they must always be live
             _ql = question.lower()
             _skip = ["price","cost","how much","stock","available","size","rand",
-                     "buy","order","unicorn","teddy","bear","plushie","dino","bunny",
-                     "product","cheap","expensive","rainbow","giant","mini","r3","r4","r5"]
+                     "buy","order","product","cheap","expensive","r3","r4","r5"]
             if any(w in _ql for w in _skip) or "[PRODUCT INFO" in question:
                 return
             normalized = self._normalize_question(question)
@@ -192,8 +191,7 @@ class HybridEngine:
         # Skip cache for conversational messages and ANY product/price query
         _ql = question.lower()
         _price_words = ["price","cost","how much","stock","available","size","r ",
-                        "rand","buy","order","unicorn","teddy","bear","plushie","dino",
-                        "bunny","product","cheap","expensive","rainbow","giant","mini"]
+                        "rand","buy","order","product","cheap","expensive"]
         skip_cache = (
             len(question.strip()) < 20
             or chat_history
@@ -208,13 +206,31 @@ class HybridEngine:
             return
 
         try:
-            # Business config from env vars — works for any client
+            # Business config: look up THIS client's real account first (multi-tenant),
+            # falling back to env vars only if no account row exists (legacy/CuddleHeros).
             import os as _os
-            business_name     = _os.environ.get("BUSINESS_NAME", "CuddleHeros")
-            business_type     = _os.environ.get("BUSINESS_TYPE", "premium plushie brand")
+            business_name     = "Your Business"
+            business_type     = "retail business"
             business_location = _os.environ.get("BUSINESS_LOCATION", "South Africa")
-            shop_url          = _os.environ.get("SHOP_URL", "https://cuddleheros.co.za")
-            voucher_code      = _os.environ.get("VOUCHER_CODE", "")
+            shop_url          = _os.environ.get("SHOP_URL", "")
+            voucher_code      = ""
+            try:
+                _acct_rows = (self.supabase.table("accounts").select("*")
+                              .eq("client_id", self.client_id).limit(1).execute().data)
+                _acct = _acct_rows[0] if _acct_rows else None
+            except Exception:
+                _acct = None
+            if _acct:
+                business_name = _acct.get("business_name") or business_name
+                business_type = _acct.get("business_type") or business_type
+                shop_url      = _acct.get("shop_url") or shop_url
+                voucher_code  = _acct.get("voucher_code") or ""
+            else:
+                # No account row — legacy single-client deployment reads env vars.
+                business_name = _os.environ.get("BUSINESS_NAME", business_name)
+                business_type = _os.environ.get("BUSINESS_TYPE", business_type)
+                shop_url      = _os.environ.get("SHOP_URL", shop_url)
+                voucher_code  = _os.environ.get("VOUCHER_CODE", "")
             voucher_line      = (f"- Mention the {voucher_code} voucher code when relevant\n"
                                  if voucher_code else "")
 
@@ -227,14 +243,19 @@ class HybridEngine:
                 f"IMPORTANT: The shop is at {shop_url} — always use this exact URL. "
                 f"Never use any other URL.\n\n"
 
+                f"If asked what you are or who you work for, say you are {business_name}'s "
+                f"AI assistant, here to help with questions, products, and orders. "
+                f"Never claim to be human, and never describe yourself using another "
+                f"business's products or category — you represent {business_name} only.\\n\\n"
+
                 f"Your role is to help customers:\\n"
                 "- CRITICAL: When you see [PRODUCT INFO] in the message, those are the\\n"
                 "  REAL prices from the live database. ALWAYS use them. State exact prices.\\n"
                 "  Never say check the product page when PRODUCT INFO is provided.\\n"
                 "- If PRODUCT INFO lists MULTIPLE products, list EACH one with its OWN\\n"
                 "  exact price. Never blend, average, round, or pick just one. Show all\\n"
-                "  matches so the customer can choose. Example: We have two unicorns —\\n"
-                "  the Rainbow Unicorn at R379 and the Sparkle Unicorn at R359.\\n"
+                "  matches so the customer can choose. Example: We have two options —\\n"
+                "  Product A at R379 and Product B at R359.\\n"
                 "- NEVER state a price that is not exactly in the PRODUCT INFO.\\n"
                 "- Only if NO product info is given AND you genuinely cannot answer,\\n"
                 "  briefly say you will check and offer to connect them with the team.\\n"
