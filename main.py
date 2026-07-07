@@ -1510,6 +1510,8 @@ async def chat_page(request: Request):
         'price', 'cost', 'how much', 'order', 'buy', 'purchase',
         'ship', 'deliver', 'custom', 'want', 'get one', 'get it',
         'available', 'stock', 'gift', 'present', 'birthday',
+        'discount', 'voucher', 'coupon', 'promo', 'promotion',
+        'sale', '% off', 'percent off', 'deal', 'special offer',
     ]
     has_intent = any(
         any(kw in m.get('content','').lower() for kw in LEAD_INTENT_KEYWORDS)
@@ -3057,6 +3059,8 @@ async def widget_chat(request: Request):
             "price", "cost", "how much", "order", "buy", "purchase",
             "ship", "deliver", "custom", "gift", "birthday",
             "available", "stock", "checkout", "add to cart",
+            "discount", "voucher", "coupon", "promo", "promotion",
+            "sale", "% off", "percent off", "deal", "special offer",
         ]
         history = load_history(sid, cid)
         has_intent = any(kw in q_lower for kw in LEAD_INTENT)
