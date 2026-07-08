@@ -19,7 +19,7 @@ from slowapi.errors import RateLimitExceeded
 
 from hybrid_engine import HybridEngine
 from analytics import compute_metrics, render_dashboard
-from orders import record_order, lookup_order, order_metrics
+from orders import record_order, lookup_order, order_metrics, update_order_status, list_orders
 import tenancy
 import wizard
 
@@ -2338,6 +2338,22 @@ async def webhook_order(request: Request):
     return JSONResponse(result, status_code=status)
 
 
+@app.post("/admin/orders/update-status")
+async def admin_update_order_status(request: Request, order_number: str = Form(...), status: str = Form(...)):
+    """Manually change an order's status from the admin Orders screen — for
+    clients whose platform doesn't auto-fire status-change webhooks."""
+    acid = admin_client(request)
+    if not acid:
+        return JSONResponse({"ok": False, "error": "Not authenticated"}, status_code=401)
+    try:
+        sb = _get_supabase()
+        result = update_order_status(sb, acid, order_number, status)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+    except Exception as e:
+        logger.error(f"admin_update_order_status error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.get("/admin/orders/test", response_class=HTMLResponse)
 async def admin_orders_test(request: Request):
     """A simple in-admin form to push a test order — lets the owner see
@@ -2411,6 +2427,163 @@ async def admin_impact(request: Request):
         return HTMLResponse(f'<div class="p-8 text-red-500">Impact dashboard error: {e}</div>')
 
 
+def _build_settings_panel(acid: str, sb) -> str:
+    """Settings tab: webhook URL (with the client's own secret), branding
+    summary, and account info — so a client can self-serve their integration
+    instead of needing you to hand it to them manually."""
+    E = _esc_html
+    try:
+        acct = tenancy.get_account(sb, acid) or {}
+    except Exception:
+        acct = {}
+    base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
+    secret = acct.get("webhook_secret", "")
+    webhook_url = f"{base}/webhook/order?secret={secret}" if secret else ""
+    embed_code = f'<script src="{base}/embed.js?client={acid}"></script>'
+
+    def row(label, value, mono=False):
+        font = "font-family:monospace;" if mono else ""
+        shown = E(value) if value else "<span style='color:#8B6914'>Not set</span>"
+        return (
+            f"<div style='margin-bottom:16px'>"
+            f"<label style='display:block;font-size:11px;font-weight:600;color:#8B6914;"
+            f"text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px'>{label}</label>"
+            f"<div style='padding:10px 14px;background:#FFF9F4;border:1px solid #FFE4CC;"
+            f"border-radius:8px;font-size:13px;color:#2D1B00;{font}word-break:break-all'>{shown}</div></div>"
+        )
+
+    def copy_box(label, value, elid):
+        return (
+            f"<div style='margin-bottom:16px'>"
+            f"<label style='display:block;font-size:11px;font-weight:600;color:#8B6914;"
+            f"text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px'>{label}</label>"
+            f"<div style='position:relative'>"
+            f"<textarea id='{elid}' readonly rows='2' style='width:100%;padding:10px 14px;"
+            f"background:#2D1B00;color:#FFE4CC;font-family:monospace;font-size:12px;border:none;"
+            f"border-radius:8px;resize:none'>{E(value)}</textarea>"
+            f"<button onclick=\"var t=document.getElementById('{elid}');t.select();document.execCommand('copy');"
+            f"this.textContent='Copied!';setTimeout(function(){{this.textContent='Copy';}}.bind(this),1500)\" "
+            f"style='position:absolute;top:6px;right:6px;padding:5px 10px;font-size:11px;"
+            f"background:#FF922B;color:white;border:none;border-radius:6px;cursor:pointer'>Copy</button>"
+            f"</div></div>"
+        )
+
+    if secret:
+        webhook_section = (
+            "<div style='background:#FFF0DB;border:1px solid #FFD5A5;border-radius:10px;padding:14px;margin-bottom:20px'>"
+            "<p style='font-size:13px;color:#5A3A1B;line-height:1.5'>Point your store's order webhook (Shopify: "
+            "Settings &rarr; Notifications &rarr; Webhooks, or WooCommerce: Settings &rarr; Advanced &rarr; Webhooks) "
+            "at the URL below to automatically track sales and see them in your Impact dashboard.</p></div>"
+            + copy_box("Your webhook URL", webhook_url, "wh-url")
+        )
+    else:
+        webhook_section = (
+            "<div style='background:#FEF2F2;border:1px solid #FECACA;border-radius:10px;padding:14px'>"
+            "<p style='font-size:13px;color:#991b1b'>No webhook secret found for this account. "
+            "This is generated automatically for accounts created through the setup wizard.</p></div>"
+        )
+
+    return (
+        "<div class='bg-white rounded-xl shadow-sm border border-[#FFE4CC] p-5 mb-4'>"
+        "<h2 class='font-bold text-[#2D1B00] text-sm mb-4'>&#9881;&#65039; Store Connection</h2>"
+        + webhook_section +
+        "</div>"
+        "<div class='bg-white rounded-xl shadow-sm border border-[#FFE4CC] p-5 mb-4'>"
+        "<h2 class='font-bold text-[#2D1B00] text-sm mb-4'>&#127760; Your Embed Code</h2>"
+        "<p style='font-size:13px;color:#5A3A1B;margin-bottom:12px'>Paste this on your website just before "
+        "the closing &lt;/body&gt; tag.</p>"
+        + copy_box("Embed code", embed_code, "wh-embed") +
+        "</div>"
+        "<div class='bg-white rounded-xl shadow-sm border border-[#FFE4CC] p-5'>"
+        "<h2 class='font-bold text-[#2D1B00] text-sm mb-4'>&#127970; Business Details</h2>"
+        + row("Business name", acct.get("business_name", ""))
+        + row("Business type", acct.get("business_type", ""))
+        + row("Shop URL", acct.get("shop_url", ""))
+        + row("WhatsApp number", acct.get("whatsapp_number", ""))
+        + row("Voucher code", acct.get("voucher_code", ""))
+        + row("Client ID", acid, mono=True)
+        + "</div>"
+    )
+
+
+def _build_orders_panel(acid: str, sb) -> str:
+    """Orders tab: recent orders with a manual status dropdown — for clients
+    whose store doesn't auto-fire status-change webhooks."""
+    E = _esc_html
+    orders = list_orders(sb, acid, limit=100)
+    status_options = ["processing", "paid", "packed", "shipped", "delivered", "cancelled", "refunded"]
+
+    if not orders:
+        rows_html = (
+            "<tr><td colspan='6' class='px-4 py-8 text-center text-sm text-[#8B6914]'>"
+            "No orders yet. Connect your store's webhook in Settings, or push a test order.</td></tr>"
+        )
+    else:
+        rows_html = ""
+        for o in orders:
+            onum = E(str(o.get("order_number", "")))
+            email = E(o.get("email", "") or "\u2014")
+            amount = o.get("amount", 0) or 0
+            currency = o.get("currency", "ZAR")
+            status = o.get("status", "processing")
+            attributed = o.get("attributed", False)
+            created = E(str(o.get("created_at", ""))[:10])
+            opts = "".join(
+                "<option value='" + s + "'" + (" selected" if s == status else "") + ">" + s.capitalize() + "</option>"
+                for s in status_options
+            )
+            if attributed:
+                attr_badge = "<span style='background:#DCFCE7;color:#166534;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:600'>Teddy</span>"
+            else:
+                attr_badge = "<span style='background:#F3F4F6;color:#6b7280;padding:2px 8px;border-radius:100px;font-size:10px'>Direct</span>"
+            rows_html += (
+                "<tr class='border-b border-[#FFE4CC] hover:bg-[#FFFAF5]'>"
+                "<td class='px-4 py-3 text-sm font-mono text-[#2D1B00]'>#" + onum + "</td>"
+                "<td class='px-4 py-3 text-sm text-[#5A3A1B]'>" + email + "</td>"
+                "<td class='px-4 py-3 text-sm font-semibold text-[#FF922B]'>" + currency + " " + f"{amount:,.2f}" + "</td>"
+                "<td class='px-4 py-3'>" + attr_badge + "</td>"
+                "<td class='px-4 py-3'>"
+                "<select onchange=\"updateOrderStatus('" + onum + "', this.value, this)\" "
+                "style='padding:5px 8px;border:1px solid #FFD5A5;border-radius:6px;font-size:12px;background:white'>"
+                + opts + "</select></td>"
+                "<td class='px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap'>" + created + "</td></tr>"
+            )
+
+    js = (
+        "<script>"
+        "function updateOrderStatus(onum, status, el){"
+        "  el.disabled=true;"
+        "  var fd=new FormData();fd.append('order_number',onum);fd.append('status',status);"
+        "  fetch('/admin/orders/update-status',{method:'POST',body:fd,credentials:'same-origin'})"
+        "  .then(function(r){return r.json();})"
+        "  .then(function(d){"
+        "    el.disabled=false;"
+        "    el.style.borderColor = d.ok ? '#22c55e' : '#ef4444';"
+        "    setTimeout(function(){el.style.borderColor='#FFD5A5';},1500);"
+        "  }).catch(function(){el.disabled=false;el.style.borderColor='#ef4444';});"
+        "}"
+        "</script>"
+    )
+
+    return (
+        "<div class='bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-4'>"
+        "<div class='px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center'>"
+        "<h2 class='font-bold text-[#2D1B00] text-sm'>&#128230; Orders "
+        "<span class='ml-2 text-xs font-normal text-[#8B6914]'>(" + str(len(orders)) + ")</span></h2>"
+        "<a href='/admin/orders/test' class='text-xs text-[#FF922B] hover:underline font-semibold'>&#129514; Push test order</a>"
+        "</div>"
+        "<div class='overflow-x-auto'><table class='w-full'>"
+        "<thead class='bg-[#FFF9F4]'><tr>"
+        "<th class='px-4 py-2 text-left text-xs text-[#8B6914] uppercase'>Order</th>"
+        "<th class='px-4 py-2 text-left text-xs text-[#8B6914] uppercase'>Email</th>"
+        "<th class='px-4 py-2 text-left text-xs text-[#8B6914] uppercase'>Amount</th>"
+        "<th class='px-4 py-2 text-left text-xs text-[#8B6914] uppercase'>Source</th>"
+        "<th class='px-4 py-2 text-left text-xs text-[#8B6914] uppercase'>Status</th>"
+        "<th class='px-4 py-2 text-left text-xs text-[#8B6914] uppercase'>Date</th>"
+        "</tr></thead><tbody>" + rows_html + "</tbody></table></div></div>" + js
+    )
+
+
 async def _admin_dashboard(request: Request):
     try:
         acid = admin_client(request)
@@ -2426,6 +2599,7 @@ async def _admin_dashboard(request: Request):
         conv_count     = len(sb.table("conversations").select("id").eq("client_id", acid).execute().data or [])
         products_count = len(sb.table("products").select("id").eq("client_id", acid).execute().data or [])
         faqs_count     = len(sb.table("faqs").select("id").eq("client_id", acid).execute().data or [])
+        orders_count   = len(sb.table("orders").select("id").eq("client_id", acid).execute().data or [])
         today          = datetime.now().date().isoformat()
         today_leads    = len(sb.table("leads").select("id").eq("client_id", acid).gte("timestamp", today).execute().data or [])
 
@@ -2538,13 +2712,19 @@ async def _admin_dashboard(request: Request):
             + tab_button("products", "Products", products_count)
             + tab_button("faqs", "FAQs", faqs_count)
             + tab_button("conversations", "Conversations", conv_count)
+            + tab_button("orders", "Orders", orders_count)
+            + "<button id='tab-settings' data-tab='settings' onclick='showPanel(this.dataset.tab)' "
+              "style='background:white;color:#5A3A1B;border:2px solid #FFE4CC;border-radius:12px;padding:16px;"
+              "text-align:left;cursor:pointer;transition:all .2s;width:100%;font-family:inherit'>"
+              "<p style='font-size:11px;text-transform:uppercase;letter-spacing:.05em'>&#9881;&#65039; Settings</p>"
+              "<p style='font-size:13px;font-weight:600;margin-top:4px;color:#8B6914'>Webhook &amp; embed</p></button>"
             + "</div>"
         )
 
         tab_js = (
             "<script>"
             "function showPanel(t){"
-            "var names=['leads','products','faqs','conversations'];"
+            "var names=['leads','products','faqs','conversations','orders','settings'];"
             "for(var i=0;i<names.length;i++){"
             "var id=names[i];"
             "var p=document.getElementById('panel-'+id);"
@@ -2570,6 +2750,8 @@ async def _admin_dashboard(request: Request):
             + "<div id='panel-products' style='display:none'>" + products_panel + "</div>"
             + "<div id='panel-faqs' style='display:none'>" + _build_faq_panel(acid) + "</div>"
             + "<div id='panel-conversations' style='display:none'>" + convs_panel + "</div>"
+            + "<div id='panel-orders' style='display:none'>" + _build_orders_panel(acid, sb) + "</div>"
+            + "<div id='panel-settings' style='display:none'>" + _build_settings_panel(acid, sb) + "</div>"
             + "</div>"
             + tab_js
             + "</div></div>"
