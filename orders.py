@@ -229,6 +229,40 @@ def lookup_order(supabase, query: str, client_id: str, email: str | None = None)
         return None
 
 
+def update_order_status(supabase, client_id: str, order_number: str, new_status: str) -> dict:
+    """
+    Manually update an order's status — for clients whose platform doesn't
+    auto-fire status webhooks. Used by the admin Orders screen.
+    """
+    status = (new_status or "").strip().lower()
+    if status not in VALID_STATUSES:
+        return {"ok": False, "error": f"Invalid status. Must be one of: {', '.join(sorted(VALID_STATUSES))}"}
+    try:
+        existing = (supabase.table("orders").select("id")
+                    .eq("client_id", client_id).eq("order_number", order_number)
+                    .limit(1).execute().data)
+        if not existing:
+            return {"ok": False, "error": f"Order {order_number} not found"}
+        supabase.table("orders").update({"status": status}).eq("id", existing[0]["id"]).execute()
+        logger.info(f"Order {order_number} manually set to {status} for {client_id}")
+        return {"ok": True, "order_number": order_number, "status": status}
+    except Exception as e:
+        logger.error(f"update_order_status error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def list_orders(supabase, client_id: str, limit: int = 100) -> list:
+    """Fetch recent orders for the admin Orders screen, newest first."""
+    try:
+        return (supabase.table("orders").select("*")
+                .eq("client_id", client_id)
+                .order("created_at", desc=True)
+                .limit(limit).execute().data or [])
+    except Exception as e:
+        logger.error(f"list_orders error: {e}")
+        return []
+
+
 def order_metrics(supabase, client_id: str, days: int = 30) -> dict:
     """
     Confirmed-revenue metrics for the Impact Dashboard.
