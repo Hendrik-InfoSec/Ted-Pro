@@ -4,6 +4,8 @@ import time
 import smtplib
 import logging
 import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -108,6 +110,102 @@ BUY_KEYWORDS = [
     "purchase", "checkout", "buy now", "order now",
     "add to cart", "how do i pay", "how to pay",
 ]
+
+# ---------------------------------------------------------------------------
+# Prompt injection guard — the widget is public and unauthenticated, so anyone
+# can type "ignore previous instructions" or try to spoof the internal
+# [PRODUCT INFO] delimiter used to feed Ted real prices. This catches known
+# attack patterns before a user message ever reaches the AI.
+# ---------------------------------------------------------------------------
+import re as _re_guard
+
+_PROMPT_INJECTION_PATTERNS = [
+    r"ignore\s+(all\s+)?(previous|prior|earlier)\s+(instructions?|commands?|prompts?)",
+    r"forget\s+(everything|all|the\s+previous)",
+    r"you\s+are\s+now\s+(DAN|do\s+anything\s+now)",
+    r"system\s*[:\-]\s*new\s+instruction",
+    r"\{\{system\}\}",
+    r"\[system\s+prompt\]",
+    r"\[INST\].*\[/INST\]",
+    r"<s>\s*\[INST\]",
+    r"\[END\s+PRODUCT\s+INFO\]",
+    r"\[PRODUCT\s+INFO",
+    r"you\s+will\s+now\s+(act\s+as|behave\s+as|pretend\s+to\s+be)",
+    r"send\s+(this|the|all)\s+(data|info|information|conversation)\s+to",
+    r"<\s*\|\s*im_start\s*\|>",
+    r"<\s*\|\s*im_end\s*\|>",
+    r"<\s*\|\s*system\s*\|>",
+    r"<\s*\|\s*user\s*\|>",
+    r"<\s*\|\s*assistant\s*\|>",
+]
+_INJECTION_RE = _re_guard.compile(
+    "|".join(f"({p})" for p in _PROMPT_INJECTION_PATTERNS),
+    _re_guard.IGNORECASE | _re_guard.DOTALL
+)
+_FORBIDDEN_DELIMITERS = ["[PRODUCT INFO", "[END PRODUCT INFO]", "[END PRODUCT INFO"]
+
+
+def sanitize_for_ai(text: str) -> tuple:
+    """
+    Screen a raw user message before it reaches the AI. Returns (cleaned_text,
+    is_safe). is_safe=False means the message matched a known injection pattern
+    or tried to spoof our internal [PRODUCT INFO] delimiter — the caller should
+    show a polite refusal instead of forwarding it to the model.
+    """
+    if not text:
+        return text, True
+    if _INJECTION_RE.search(text):
+        return "", False
+    for delim in _FORBIDDEN_DELIMITERS:
+        if delim.lower() in text.lower():
+            return "", False
+    cleaned = text.replace("[", "\u2985").replace("]", "\u2986")
+    cleaned = cleaned.replace("{", "\uff5b").replace("}", "\uff5d")
+    cleaned = cleaned.replace("<|", "\u2039|").replace("|>", "|\u203a")
+    cleaned = _re_guard.sub(r"\n{3,}", "\n\n", cleaned)
+    if len(cleaned) > 2000:
+        cleaned = cleaned[:2000]
+    return cleaned, True
+
+
+def sanitize_enhanced_query(enhanced_query: str, user_query: str) -> str:
+    """If the raw user query itself contains our internal delimiter, prefer the
+    raw query over the system-built enhanced one (defence in depth; in practice
+    sanitize_for_ai already blocks this case before we get here)."""
+    if "[PRODUCT INFO" in user_query or "[END PRODUCT INFO" in user_query:
+        return user_query
+    return enhanced_query
+
+
+# ---------------------------------------------------------------------------
+# CSRF protection for admin write actions. The session cookie is set with
+# same_site="none" (needed for the embeddable widget), which disables the
+# browser's default CSRF protection for EVERY cookie-based session, including
+# the admin one. This restores that protection for the actions that matter:
+# state-changing admin operations (delete/edit FAQs, upload products, change
+# stock, update order status). Login itself is a plain HTML form post (not
+# fetch/XHR) and isn't a meaningful CSRF target — an attacker forging a login
+# attempt still doesn't know the real password — so it's intentionally excluded.
+# ---------------------------------------------------------------------------
+
+def generate_csrf_token(request: Request) -> str:
+    token = secrets.token_urlsafe(32)
+    request.session["csrf_token"] = token
+    return token
+
+
+def validate_csrf_token(request: Request) -> bool:
+    header_token = request.headers.get("x-csrf-token", "")
+    session_token = request.session.get("csrf_token", "")
+    if not header_token or not session_token:
+        return False
+    return hmac.compare_digest(header_token, session_token)
+
+
+def csrf_meta_tag(request: Request) -> str:
+    token = request.session.get("csrf_token") or generate_csrf_token(request)
+    return f'<meta name="csrf-token" content="{token}">'
+
 
 def _strip_urls(text: str) -> str:
     import re as _re2
@@ -653,6 +751,47 @@ document.addEventListener('htmx:afterSettle', function(e) {{
   setTimeout(scrollChat, 100);
 }});
 </script>
+{csrf_meta}
+<script>
+// Auto-attach the CSRF token (if present on this page) to any same-origin
+// write request — both htmx requests and plain fetch() calls — so existing
+// JS across the admin panel doesn't need to be individually edited.
+(function() {{
+  function token() {{
+    var m = document.querySelector('meta[name="csrf-token"]');
+    return m ? m.getAttribute('content') : null;
+  }}
+  document.body && document.body.addEventListener('htmx:configRequest', function(evt) {{
+    var t = token();
+    if (t) evt.detail.headers['X-CSRF-Token'] = t;
+  }});
+  document.addEventListener('DOMContentLoaded', function() {{
+    document.body.addEventListener('htmx:configRequest', function(evt) {{
+      var t = token();
+      if (t) evt.detail.headers['X-CSRF-Token'] = t;
+    }});
+  }});
+  var _origFetch = window.fetch;
+  window.fetch = function(input, init) {{
+    init = init || {{}};
+    var method = (init.method || 'GET').toUpperCase();
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var sameOrigin = url.indexOf('http') !== 0 || url.indexOf(window.location.origin) === 0;
+    if (sameOrigin && ['POST','PUT','DELETE','PATCH'].indexOf(method) !== -1) {{
+      var t = token();
+      if (t) {{
+        init.headers = init.headers || {{}};
+        if (init.headers instanceof Headers) {{
+          init.headers.set('X-CSRF-Token', t);
+        }} else {{
+          init.headers['X-CSRF-Token'] = t;
+        }}
+      }}
+    }}
+    return _origFetch(input, init);
+  }};
+}})();
+</script>
 {admin_js}
 </head>
 <body class="min-h-screen" onload="scrollChat()">
@@ -660,11 +799,21 @@ document.addEventListener('htmx:afterSettle', function(e) {{
 </body>
 </html>"""
 
-def render_page(title: str, content: str, include_admin_js: bool = False) -> str:
+def render_page(title: str, content: str, include_admin_js: bool = False, request: Request = None) -> str:
+    # CSRF token is only emitted for admin pages (include_admin_js implies an
+    # admin context in this app) and only when a request is available to hold
+    # the session. Harmless no-op for every other page.
+    csrf_meta = ""
+    if include_admin_js and request is not None:
+        try:
+            csrf_meta = csrf_meta_tag(request)
+        except Exception:
+            csrf_meta = ""
     return BASE_HTML.format(
         title=title,
         content=content,
-        admin_js=ADMIN_JS if include_admin_js else ""
+        admin_js=ADMIN_JS if include_admin_js else "",
+        csrf_meta=csrf_meta,
     )
 
 def error_page(code: int, heading: str, message: str) -> str:
@@ -1349,6 +1498,8 @@ async def bulk_upload_faqs(request: Request, faq_file: str = Form(...)):
     """Accept CSV text with category,question,answer and bulk insert FAQs."""
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("❌ Not authenticated.", status_code=401)
+    if not validate_csrf_token(request):
+        return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     if not _admin_verified(request):
         return HTMLResponse("❌ Password verification required.", status_code=403)
     try:
@@ -1399,6 +1550,8 @@ async def bulk_upload_faqs(request: Request, faq_file: str = Form(...)):
 async def add_faq(request: Request, question: str = Form(...), answer: str = Form(...), category: str = Form("General")):
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("Not authenticated", status_code=401)
+    if not validate_csrf_token(request):
+        return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
         result = sb.table("faqs").insert({
@@ -1423,6 +1576,8 @@ async def add_faq(request: Request, question: str = Form(...), answer: str = For
 async def update_faq(request: Request, faq_id: str, question: str = Form(...), answer: str = Form(...), category: str = Form("General")):
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("Not authenticated", status_code=401)
+    if not validate_csrf_token(request):
+        return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
         sb.table("faqs").update({
@@ -1445,6 +1600,8 @@ async def update_faq(request: Request, faq_id: str, question: str = Form(...), a
 async def toggle_faq(request: Request, faq_id: str):
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("Not authenticated", status_code=401)
+    if not validate_csrf_token(request):
+        return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb  = _get_supabase()
         cur = sb.table("faqs").select("*").eq("id", faq_id).single().execute().data
@@ -1462,6 +1619,8 @@ async def toggle_faq(request: Request, faq_id: str):
 async def delete_faq(request: Request, faq_id: str):
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("Not authenticated", status_code=401)
+    if not validate_csrf_token(request):
+        return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         _get_supabase().table("faqs").delete().eq("id", faq_id).execute()
         request.session.pop("admin_verified", None)
@@ -1812,7 +1971,19 @@ async def chat_response(request: Request):
             except Exception as _e:
                 logger.error(f"Product lookup error: {_e}")
 
-        history_for_context.append({"role": "user", "content": query})
+        cleaned_query, _is_safe = sanitize_for_ai(query)
+        if not _is_safe:
+            final = "I'm not able to process that request. Please ask me about our products! \U0001f9f8"
+            t = get_teddy_time()
+            save_history_row(session_id, query, final)
+            store["response"]   = final
+            store["time"]       = t
+            store["ready"]      = True
+            store["processing"] = False
+            return HTMLResponse(content=bot_bubble(final, t))
+
+        enhanced_query = sanitize_enhanced_query(enhanced_query, cleaned_query)
+        history_for_context.append({"role": "user", "content": cleaned_query})
 
         full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
         full_response = _strip_urls(full_response)
@@ -1909,6 +2080,8 @@ def _login_page(icon: str, title: str, action: str, error: str = "") -> str:
 async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("Not authenticated", status_code=401)
+    if not validate_csrf_token(request):
+        return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
         sb.table("products").update({"stock_quantity": qty}).eq("id", product_id).execute()
@@ -1933,6 +2106,8 @@ async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
 async def toggle_stock(request: Request, product_id: str):
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("Not authenticated", status_code=401)
+    if not validate_csrf_token(request):
+        return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
         current = sb.table("products").select("in_stock").eq("id", product_id).single().execute().data
@@ -1973,6 +2148,8 @@ async def toggle_stock(request: Request, product_id: str):
 async def upload_products(request: Request, csv_data: str = Form(...)):
     if not request.session.get("admin_authenticated"):
         return HTMLResponse('\u274c Not authenticated.', status_code=401)
+    if not validate_csrf_token(request):
+        return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         import io, csv as csv_mod
         sb = _get_supabase()
@@ -2258,7 +2435,7 @@ async def admin_reverify(request: Request, password: str = Form(...)):
     """Re-verification for sensitive actions."""
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("Not authenticated", status_code=401)
-    if password == ADMIN_PASSWORD:
+    if hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")):
         request.session["admin_verified"] = True
         return HTMLResponse("OK")
     return HTMLResponse("Wrong password", status_code=403)
@@ -2282,7 +2459,7 @@ async def admin_login(request: Request, password: str = Form(...)):
         return HTMLResponse(content=render_page("Admin Login",
             _login_page("\U0001f512", "Admin Access", f"/admin/login?client={cid}", "Incorrect password."), include_admin_js=True))
     # Legacy global admin
-    if password == ADMIN_PASSWORD:
+    if hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")):
         request.session["admin_authenticated"] = True
         request.session["client_id"] = CLIENT_ID
         return RedirectResponse(url="/admin", status_code=303)
@@ -2345,6 +2522,8 @@ async def admin_update_order_status(request: Request, order_number: str = Form(.
     acid = admin_client(request)
     if not acid:
         return JSONResponse({"ok": False, "error": "Not authenticated"}, status_code=401)
+    if not validate_csrf_token(request):
+        return JSONResponse({"ok": False, "error": "Invalid or missing CSRF token — please refresh and try again."}, status_code=403)
     try:
         sb = _get_supabase()
         result = update_order_status(sb, acid, order_number, status)
@@ -2756,7 +2935,7 @@ async def _admin_dashboard(request: Request):
             + tab_js
             + "</div></div>"
         )
-        return HTMLResponse(content=render_page("Admin Dashboard", content, include_admin_js=True))
+        return HTMLResponse(content=render_page("Admin Dashboard", content, include_admin_js=True, request=request))
     except Exception as e:
         logger.error(f"Admin error: {e}", exc_info=True)
         return HTMLResponse(f'<div class="p-8 text-red-500">Dashboard error: {e}</div>')
@@ -2773,7 +2952,7 @@ async def dev_page(request: Request):
 
 @app.post("/dev/login", response_class=HTMLResponse)
 async def dev_login(request: Request, password: str = Form(...)):
-    if password == DEV_PASSWORD:
+    if hmac.compare_digest(password.encode("utf-8"), DEV_PASSWORD.encode("utf-8")):
         request.session["dev_authenticated"] = True
         return RedirectResponse(url="/dev", status_code=303)
     return HTMLResponse(content=render_page("Dev Login",
@@ -3314,8 +3493,18 @@ async def widget_chat(request: Request):
             except Exception as prod_err:
                 logger.error(f"Product lookup error: {prod_err}")
 
-        # 5. AI response
-        history.append({"role": "user", "content": prompt})
+        # 5. AI response — screen for prompt-injection attempts first
+        cleaned_prompt, _is_safe = sanitize_for_ai(prompt)
+        if not _is_safe:
+            _refusal = "I'm not able to process that request. Please ask me about our products! \U0001f9f8"
+            save_history_row(sid, prompt, _refusal, cid)
+            _resp = {"response": _refusal}
+            if show_lead:
+                _resp["show_lead"] = True
+            return JSONResponse(_resp)
+
+        enhanced = sanitize_enhanced_query(enhanced, cleaned_prompt)
+        history.append({"role": "user", "content": cleaned_prompt})
         full = "".join(get_engine(cid).stream_answer(enhanced, chat_history=history))
         full = _strip_urls(full)
 
