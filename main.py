@@ -1584,7 +1584,7 @@ async def update_faq(request: Request, faq_id: str, question: str = Form(...), a
             "question": question.strip(),
             "answer":   answer.strip(),
             "category": category.strip() or "General",
-        }).eq("id", faq_id).execute()
+        }).eq("id", faq_id).eq("client_id", admin_client(request)).execute()
         try:
             get_engine()._save_to_cache(question.strip().lower(), answer.strip())
         except Exception:
@@ -1604,11 +1604,11 @@ async def toggle_faq(request: Request, faq_id: str):
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb  = _get_supabase()
-        cur = sb.table("faqs").select("*").eq("id", faq_id).single().execute().data
+        cur = sb.table("faqs").select("*").eq("id", faq_id).eq("client_id", admin_client(request)).single().execute().data
         if not cur:
             return HTMLResponse("Not found", status_code=404)
         new_active = not cur["active"]
-        sb.table("faqs").update({"active": new_active}).eq("id", faq_id).execute()
+        sb.table("faqs").update({"active": new_active}).eq("id", faq_id).eq("client_id", admin_client(request)).execute()
         return HTMLResponse(_faq_row_html(faq_id, cur["question"], cur["answer"], cur.get("category","General") or "General", new_active))
     except Exception as e:
         logger.error(f"Toggle FAQ error: {e}")
@@ -1622,7 +1622,7 @@ async def delete_faq(request: Request, faq_id: str):
     if not validate_csrf_token(request):
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
-        _get_supabase().table("faqs").delete().eq("id", faq_id).execute()
+        _get_supabase().table("faqs").delete().eq("id", faq_id).eq("client_id", admin_client(request)).execute()
         request.session.pop("admin_verified", None)
         return HTMLResponse("")
     except Exception as e:
@@ -2084,7 +2084,7 @@ async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
-        sb.table("products").update({"stock_quantity": qty}).eq("id", product_id).execute()
+        sb.table("products").update({"stock_quantity": qty}).eq("id", product_id).eq("client_id", admin_client(request)).execute()
         logger.info(f"Product {product_id} qty updated to {qty}")
         # Return the updated qty display span so HTMX swaps it in place
         return HTMLResponse(
@@ -2110,11 +2110,11 @@ async def toggle_stock(request: Request, product_id: str):
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
-        current = sb.table("products").select("in_stock").eq("id", product_id).single().execute().data
+        current = sb.table("products").select("in_stock").eq("id", product_id).eq("client_id", admin_client(request)).single().execute().data
         if not current:
             return HTMLResponse("Product not found", status_code=404)
         new_val = not current["in_stock"]
-        sb.table("products").update({"in_stock": new_val}).eq("id", product_id).execute()
+        sb.table("products").update({"in_stock": new_val}).eq("id", product_id).eq("client_id", admin_client(request)).execute()
         logger.info(f"Product {product_id} stock toggled to {new_val}")
 
         # Return just the updated badge — HTMX swaps it in place
@@ -2205,7 +2205,7 @@ async def upload_products(request: Request, csv_data: str = Form(...)):
         existing_ids = [row["id"] for row in existing]
         sb.table("products").insert(products).execute()
         if existing_ids:
-            sb.table("products").delete().in_("id", existing_ids).execute()
+            sb.table("products").delete().in_("id", existing_ids).eq("client_id", admin_client(request)).execute()
 
         request.session.pop("admin_verified", None)
         return HTMLResponse(f'\u2705 {len(products)} products uploaded successfully.')
