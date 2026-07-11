@@ -1862,6 +1862,8 @@ async def chat_response(request: Request):
     init_session(request)
     session_id = request.session["session_id"]
     store = _response_store.get(session_id)
+    # Resolve tenant so all downstream lookups are scoped correctly
+    _chat_cid = client_for(request)
 
     if not store:
         return HTMLResponse(
@@ -1891,12 +1893,12 @@ async def chat_response(request: Request):
 
         # ── 0. Handoff detection — human needed ─────────────────────────
         if any(kw in q_lower for kw in HANDOFF_KEYWORDS):
-            faq_ans = lookup_faq(query)  # still check FAQs first
+            faq_ans = lookup_faq(query, _chat_cid)  # still check FAQs first
             if not faq_ans:              # no FAQ answer → hand off
                 t = get_teddy_time()
-                ai_resp = "".join(get_engine().stream_answer(query, chat_history=load_history(session_id)))
+                ai_resp = "".join(get_engine(_chat_cid).stream_answer(query, chat_history=load_history(session_id, _chat_cid)))
                 final   = apply_teddy_vibes(ai_resp)
-                save_history_row(session_id, query, final)
+                save_history_row(session_id, query, final, _chat_cid)
                 store["response"]   = final + "|||HANDOFF|||"
                 store["time"]       = t
                 store["ready"]      = True
@@ -1911,11 +1913,11 @@ async def chat_response(request: Request):
             "refund", "damaged", "faulty", "complaint",
         ]
         _skip_faq = any(s in q_lower for s in _SUPPORT)
-        faq_answer = None if _skip_faq else lookup_faq(query)
+        faq_answer = None if _skip_faq else lookup_faq(query, _chat_cid)
         if faq_answer:
             final  = apply_teddy_vibes(faq_answer)
             t      = get_teddy_time()
-            save_history_row(session_id, query, final)
+            save_history_row(session_id, query, final, _chat_cid)
             store["response"]   = final
             store["time"]       = t
             store["ready"]      = True
@@ -1923,7 +1925,7 @@ async def chat_response(request: Request):
             return HTMLResponse(content=bot_bubble(final, t))
 
         # Load history up front so product matching can use conversation context
-        history_for_context = load_history(session_id)
+        history_for_context = load_history(session_id, _chat_cid)
 
         # ── 2. Product/price questions → deterministic DB answer (no AI) ───
         is_stock_query = any(kw in q_lower for kw in STOCK_KEYWORDS)
@@ -1937,7 +1939,7 @@ async def chat_response(request: Request):
                 sb_p = _get_supabase()
                 all_prods = sb_p.table("products").select(
                     "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
-                ).eq("client_id", CLIENT_ID).execute().data or []
+                ).eq("client_id", _chat_cid).execute().data or []
 
                 # Direct DB answer first — bypasses AI entirely, zero hallucination
                 direct = direct_price_answer(query, all_prods)
@@ -1945,7 +1947,7 @@ async def chat_response(request: Request):
                     direct = _strip_urls(direct)
                     final = apply_teddy_vibes(direct)
                     t = get_teddy_time()
-                    save_history_row(session_id, query, final)
+                    save_history_row(session_id, query, final, _chat_cid)
                     store["response"]   = final
                     store["time"]       = t
                     store["ready"]      = True
@@ -1976,7 +1978,7 @@ async def chat_response(request: Request):
         if not _is_safe:
             final = "I'm not able to process that request. Please ask me about our products! \U0001f9f8"
             t = get_teddy_time()
-            save_history_row(session_id, query, final)
+            save_history_row(session_id, query, final, _chat_cid)
             store["response"]   = final
             store["time"]       = t
             store["ready"]      = True
@@ -1986,12 +1988,12 @@ async def chat_response(request: Request):
         enhanced_query = sanitize_enhanced_query(enhanced_query, cleaned_query)
         history_for_context.append({"role": "user", "content": cleaned_query})
 
-        full_response = "".join(get_engine().stream_answer(enhanced_query, chat_history=history_for_context))
+        full_response = "".join(get_engine(_chat_cid).stream_answer(enhanced_query, chat_history=history_for_context))
         full_response = _strip_urls(full_response)
         final = apply_teddy_vibes(full_response)
         t     = get_teddy_time()
 
-        save_history_row(session_id, query, final)
+        save_history_row(session_id, query, final, _chat_cid)
 
         store["response"]   = final
         store["time"]       = t
@@ -2014,12 +2016,13 @@ async def capture_lead(request: Request, lead_name: str = Form(""), lead_email: 
     init_session(request)
     if not lead_email or "@" not in lead_email:
         return HTMLResponse('<p class="text-red-500 text-sm p-3">Please enter a valid email address.</p>')
+    _lead_cid = client_for(request)
     try:
-        saved = get_engine().add_lead(lead_name, lead_email, context="main_chat_v5")
+        saved = get_engine(_lead_cid).add_lead(lead_name, lead_email, context="main_chat_v5")
         if saved:
             request.session["lead_captured"] = True
             try:
-                _brand = tenancy.account_branding(_get_supabase(), CLIENT_ID)
+                _brand = tenancy.account_branding(_get_supabase(), _lead_cid)
             except Exception:
                 _brand = None
             email_ok = send_welcome_email(lead_name, lead_email, _brand)
@@ -2047,7 +2050,8 @@ async def clear_chat(request: Request):
     if session_id:
         try:
             sb = _get_supabase()
-            sb.table("conversations").delete().eq("session_id", session_id).eq("client_id", CLIENT_ID).execute()
+            _clear_cid = client_for(request)
+            sb.table("conversations").delete().eq("session_id", session_id).eq("client_id", _clear_cid).execute()
         except Exception as e:
             logger.error(f"Clear chat Supabase error: {e}")
     _response_store.pop(session_id, None)
