@@ -1304,7 +1304,7 @@ def _build_faq_panel(client_id: str = None) -> str:
         tlabel = "Deactivate" if active else "Activate"
         return (
             f'<tr id="faq-row-{fid}" class="border-b border-[#FFE4CC] hover:bg-[#FFFAF5]">'
-            f'<td class="px-4 py-3 text-xs text-[#8B6914] font-medium whitespace-nowrap">{cat}</td>'
+            f'<td class="px-4 py-3 text-xs text-[#8B6914] font-medium whitespace-nowrap">{cat}'f'<br><span style="font-family:monospace;font-size:9px;color:#c0a070" title="{fid}">id:{fid[:8]}</span></td>'
             f'<td class="px-4 py-3 text-sm text-[#2D1B00] font-medium">{_esc_html(f.get("question",""))}</td>'
             f'<td class="px-4 py-3 text-sm text-[#5A3A1B]"><div style="max-height:60px;overflow:hidden">{_esc_html(f.get("answer",""))}</div></td>'
             f'<td class="px-4 py-3">{badge}</td>'
@@ -2432,10 +2432,25 @@ async def export_conversations(request: Request):
 
 @app.post("/admin/reverify", response_class=HTMLResponse)
 async def admin_reverify(request: Request, password: str = Form(...)):
-    """Re-verification for sensitive actions."""
+    """Re-verification for sensitive actions. Checks THIS client's own password,
+    not the global ADMIN_PASSWORD, so multi-tenant admins can use their own creds."""
     if not request.session.get("admin_authenticated"):
         return HTMLResponse("Not authenticated", status_code=401)
-    if hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")):
+    cid = admin_client(request)
+    verified = False
+    if cid and cid != CLIENT_ID:
+        # Per-client account: check their own stored password hash
+        try:
+            sb = _get_supabase()
+            acct = tenancy.get_account(sb, cid)
+            if acct:
+                verified = tenancy.verify_password(password, acct.get("admin_password_hash", ""))
+        except Exception as e:
+            logger.error(f"admin_reverify lookup error: {e}")
+    else:
+        # Legacy CuddleHeros: check global ADMIN_PASSWORD env var
+        verified = hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8"))
+    if verified:
         request.session["admin_verified"] = True
         return HTMLResponse("OK")
     return HTMLResponse("Wrong password", status_code=403)
