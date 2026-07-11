@@ -108,7 +108,10 @@ def _step_body(step: int, base_url: str, cid: str, biz: str, primary: str) -> st
 <label>Business type (optional)</label>
 <input name="business_type" placeholder="e.g. Online toy store">
 <label>Admin password</label>
-<input name="admin_password" type="password" placeholder="Choose a password to manage your assistant" required>
+<div style="position:relative">
+<input id="wiz-pw" name="admin_password" type="password" placeholder="Choose a password to manage your assistant" required style="padding-right:40px">
+<button type="button" onclick="var i=document.getElementById('wiz-pw'),b=this;if(i.type==='password'){{i.type='text';b.innerHTML='👁️🚫';b.title='Hide password';}}else{{i.type='password';b.innerHTML='👁️';b.title='Show password';}}" title="Show password" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;color:#8B6914;padding:2px">👁️</button>
+</div>
 <p class="hint">You'll use this to log into your dashboard.</p>
 <button class="btn" type="submit" style="width:100%">Continue &rarr;</button>
 </form>"""
