@@ -3243,6 +3243,43 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
             "&#129528; " + b + "</div></div>"
         )
 
+    # Build quick-click buttons from the client's own FAQs — one per category, max 4
+    quick_btns_html = ""
+    try:
+        _sb_q = _get_supabase()
+        _faqs = (_sb_q.table("faqs").select("question,category")
+                 .eq("client_id", widget_cid).eq("active", True)
+                 .order("category").limit(20).execute().data or [])
+        _seen_cats = set()
+        _picks = []
+        for _f in _faqs:
+            _cat = (_f.get("category") or "General").strip()
+            if _cat not in _seen_cats and len(_picks) < 4:
+                _seen_cats.add(_cat)
+                _picks.append(_f["question"])
+        if _picks:
+            _btn_style = (
+                "display:inline-block;margin:3px;padding:8px 14px;"
+                "background:white;border:1.5px solid #FFD5A5;border-radius:20px;"
+                "font-size:12px;font-weight:600;color:#5A3A1B;cursor:pointer;"
+                "font-family:inherit"
+            )
+            _btns = ""
+            for _q in _picks:
+                _label = _esc_html(_q[:35]) + ("…" if len(_q) > 35 else "")
+                _qesc = _esc_html(_q)
+                _btns += (
+                    "<button onclick=\"quickAsk(this.dataset.q)\" "
+                    "data-q=\"" + _qesc + "\" "
+                    "style=\"" + _btn_style + "\">" + _label + "</button>"
+                )
+            quick_btns_html = (
+                "<div style='text-align:center;padding:8px 12px 4px;flex-shrink:0'>"
+                + _btns + "</div>"
+            )
+    except Exception:
+        pass
+
     if not history_html:
         history_html = (
             "<div style='text-align:center;padding:20px;color:#8B6914;font-size:13px'>"
@@ -3271,6 +3308,7 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
         "<div style='font-weight:700;font-size:14px'>Teddy</div>"
         "<div style='font-size:11px;opacity:.85'>" + _biz_name + " Assistant</div></div>"
         "<div id='msgs'>" + history_html + "</div>"
+        + quick_btns_html +
         "<div id='footer'><div id='row'>"
         "<input id='inp' type='text' placeholder='Ask Teddy...' autocomplete='off'>"
         "<button id='btn' onclick='send()'>Send</button>"
@@ -3332,7 +3370,7 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
         "    btn.disabled=false;"
         "  });"
         "}"
-        "document.getElementById('inp').onkeydown=function(e){if(e.key==='Enter')send();};"
+        "document.getElementById('inp').onkeydown=function(e){if(e.key==='Enter')send();};""function quickAsk(q){document.getElementById('inp').value=q;send();}"
         "function submitWidgetLead(){"
         "  var name=document.getElementById('wl-name').value.trim();"
         "  var email=document.getElementById('wl-email').value.trim();"
