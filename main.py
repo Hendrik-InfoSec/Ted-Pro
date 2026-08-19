@@ -3281,10 +3281,7 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
         pass
 
     if not history_html:
-        history_html = (
-            "<div style='text-align:center;padding:20px;color:#8B6914;font-size:13px'>"
-            "&#128075; Hi! Ask me anything about " + _biz_name + "!</div>"
-        )
+        history_html = ""
 
     sid_js = sid.replace("'", "\\'")
 
@@ -3307,8 +3304,13 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
         "<div style='font-size:20px'>&#129528;</div>"
         "<div style='font-weight:700;font-size:14px'>Teddy</div>"
         "<div style='font-size:11px;opacity:.85'>" + _biz_name + " Assistant</div></div>"
-        + "<div id='msgs'>" + history_html + "</div>"
+        + "<div style='text-align:center;padding:10px 12px 4px'>"
+          "<div style='display:inline-block;background:white;border-radius:16px;padding:8px 16px;"
+          "box-shadow:0 1px 6px rgba(0,0,0,0.07);border:1px solid #FFE4CC;font-size:12px;color:#5A3A1B'>"
+          "&#128075; Hi! Ask me anything about " + _biz_name + "!"
+          "</div></div>"
         + quick_btns_html
+        + "<div id='msgs'>" + history_html + "</div>"
         + "<div id='footer'><div id='row'>"
         "<input id='inp' type='text' placeholder='Ask Teddy...' autocomplete='off'>"
         "<button id='btn' onclick='send()'>Send</button>"
