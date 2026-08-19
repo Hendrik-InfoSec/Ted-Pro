@@ -3307,9 +3307,9 @@ var _cp=new URLSearchParams(location.search).get('client');location.replace('/ch
         "<div style='font-size:20px'>&#129528;</div>"
         "<div style='font-weight:700;font-size:14px'>Teddy</div>"
         "<div style='font-size:11px;opacity:.85'>" + _biz_name + " Assistant</div></div>"
-        "<div id='msgs'>" + history_html + "</div>"
-        + quick_btns_html +
-        "<div id='footer'><div id='row'>"
+        + quick_btns_html
+        + "<div id='msgs'>" + history_html + "</div>"
+        + "<div id='footer'><div id='row'>"
         "<input id='inp' type='text' placeholder='Ask Teddy...' autocomplete='off'>"
         "<button id='btn' onclick='send()'>Send</button>"
         "</div></div>"
