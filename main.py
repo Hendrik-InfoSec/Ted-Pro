@@ -3501,6 +3501,16 @@ async def widget_chat(request: Request):
             lead_captured = False
         show_lead = not lead_captured and (has_intent or msg_count >= 8)
 
+        # Voucher shortcut: if customer asks about discounts/vouchers directly
+        # and hasn't captured their lead yet — skip AI, show the card immediately.
+        # No point in Ted saying "we don't have discounts" when the card IS the discount.
+        VOUCHER_TRIGGERS = ["discount", "voucher", "coupon", "promo", "promotion",
+                            "% off", "percent off", "deal", "special offer", "sale"]
+        if show_lead and any(kw in q_lower for kw in VOUCHER_TRIGGERS):
+            _tease = "I do have something special for you! 🎁"
+            save_history_row(sid, prompt, _tease, cid)
+            return JSONResponse({"response": _tease, "show_lead": True})
+
         # 4. Build enhanced prompt with product data — fetch ALL locally
         # Always fetch products so we can match against names/categories too,
         # not just hardcoded keywords (catches "bunnies?", "stompy", etc.)
