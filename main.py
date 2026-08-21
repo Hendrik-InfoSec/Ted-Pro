@@ -1582,11 +1582,14 @@ async def update_faq(request: Request, faq_id: str, question: str = Form(...), a
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
+        _acid3 = admin_client(request)
+        if not _acid3:
+            return HTMLResponse("Not authenticated", status_code=401)
         sb.table("faqs").update({
             "question": question.strip(),
             "answer":   answer.strip(),
             "category": category.strip() or "General",
-        }).eq("id", faq_id).eq("client_id", admin_client(request)).execute()
+        }).match({"id": faq_id, "client_id": _acid3}).execute()
         try:
             get_engine()._save_to_cache(question.strip().lower(), answer.strip())
         except Exception:
@@ -1606,11 +1609,15 @@ async def toggle_faq(request: Request, faq_id: str):
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb  = _get_supabase()
-        cur = sb.table("faqs").select("*").eq("id", faq_id).eq("client_id", admin_client(request)).single().execute().data
+        _acid2 = admin_client(request)
+        if not _acid2:
+            return HTMLResponse("Not authenticated", status_code=401)
+        cur = sb.table("faqs").select("*").match({"id": faq_id, "client_id": _acid2}).execute().data
+        cur = cur[0] if cur else None
         if not cur:
             return HTMLResponse("Not found", status_code=404)
         new_active = not cur["active"]
-        sb.table("faqs").update({"active": new_active}).eq("id", faq_id).eq("client_id", admin_client(request)).execute()
+        sb.table("faqs").update({"active": new_active}).match({"id": faq_id, "client_id": _acid2}).execute()
         return HTMLResponse(_faq_row_html(faq_id, cur["question"], cur["answer"], cur.get("category","General") or "General", new_active))
     except Exception as e:
         logger.error(f"Toggle FAQ error: {e}")
@@ -1624,7 +1631,10 @@ async def delete_faq(request: Request, faq_id: str):
     if not validate_csrf_token(request):
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
-        _get_supabase().table("faqs").delete().eq("id", faq_id).eq("client_id", admin_client(request)).execute()
+        _acid = admin_client(request)
+        if not _acid:
+            return HTMLResponse("Not authenticated", status_code=401)
+        _get_supabase().table("faqs").delete().match({"id": faq_id, "client_id": _acid}).execute()
         request.session.pop("admin_verified", None)
         return HTMLResponse("")
     except Exception as e:
@@ -2096,7 +2106,10 @@ async def update_qty(request: Request, product_id: str, qty: int = Form(...)):
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
-        sb.table("products").update({"stock_quantity": qty}).eq("id", product_id).eq("client_id", admin_client(request)).execute()
+        _acid4 = admin_client(request)
+        if not _acid4:
+            return HTMLResponse("Not authenticated", status_code=401)
+        sb.table("products").update({"stock_quantity": qty}).match({"id": product_id, "client_id": _acid4}).execute()
         logger.info(f"Product {product_id} qty updated to {qty}")
         # Return the updated qty display span so HTMX swaps it in place
         return HTMLResponse(
@@ -2122,11 +2135,15 @@ async def toggle_stock(request: Request, product_id: str):
         return HTMLResponse("Invalid or missing CSRF token — please refresh the page and try again.", status_code=403)
     try:
         sb = _get_supabase()
-        current = sb.table("products").select("in_stock").eq("id", product_id).eq("client_id", admin_client(request)).single().execute().data
+        _acid5 = admin_client(request)
+        if not _acid5:
+            return HTMLResponse("Not authenticated", status_code=401)
+        current = sb.table("products").select("in_stock").match({"id": product_id, "client_id": _acid5}).execute().data
+        current = current[0] if current else None
         if not current:
             return HTMLResponse("Product not found", status_code=404)
         new_val = not current["in_stock"]
-        sb.table("products").update({"in_stock": new_val}).eq("id", product_id).eq("client_id", admin_client(request)).execute()
+        sb.table("products").update({"in_stock": new_val}).match({"id": product_id, "client_id": _acid5}).execute()
         logger.info(f"Product {product_id} stock toggled to {new_val}")
 
         # Return just the updated badge — HTMX swaps it in place
