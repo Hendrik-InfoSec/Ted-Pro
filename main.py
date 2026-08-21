@@ -2865,7 +2865,44 @@ async def _admin_dashboard(request: Request):
                 "<tbody>" + body_html + "</tbody></table></div></div>"
             )
 
-        leads_panel = card("&#128101; All Leads", ["Name", "Email", "Date"], leads_rows)
+        # Enhanced leads panel: show each lead with their conversation context
+        def build_leads_panel():
+            if not leads_data:
+                return card("&#128101; All Leads", ["Name", "Email", "Interested in", "Date"], 
+                    "<tr><td colspan='4' class='px-4 py-4 text-sm text-center text-[#8B6914]'>No leads yet — leads appear here when customers share their email in the widget</td></tr>")
+
+            # For each lead, find their first message from conversations using session_id
+            # context field stores "widget_{sid}"
+            lead_rows_html = ""
+            for l in leads_data:
+                name = E(l.get("name") or "Friend")
+                email = E(l.get("email", ""))
+                date = E(str(l.get("timestamp", ""))[:10])
+                # Extract session id from context field
+                ctx = l.get("context", "")
+                sid_from_ctx = ctx.replace("widget_", "") if ctx.startswith("widget_") else ""
+                # Find what they were asking about
+                interest = "—"
+                if sid_from_ctx:
+                    try:
+                        conv = (sb.table("conversations").select("user_message")
+                                .eq("client_id", acid).eq("session_id", sid_from_ctx)
+                                .order("created_at").limit(1).execute().data)
+                        if conv:
+                            interest = E(str(conv[0].get("user_message", ""))[:60])
+                    except Exception:
+                        pass
+                lead_rows_html += (
+                    "<tr class='border-b border-[#FFE4CC] hover:bg-[#FFFAF5]'>"
+                    "<td class='px-4 py-3 text-sm font-semibold text-[#2D1B00]'>" + name + "</td>"
+                    "<td class='px-4 py-3 text-sm text-[#5A3A1B]'>" + email + "</td>"
+                    "<td class='px-4 py-3 text-sm text-[#8B6914] italic'>" + interest + "</td>"
+                    "<td class='px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap'>" + date + "</td></tr>"
+                )
+            return card("&#128101; All Leads (" + str(len(leads_data)) + ")", 
+                       ["Name", "Email", "First asked about", "Date"], lead_rows_html)
+
+        leads_panel = build_leads_panel()
         # Make each conversation row clickable
         clickable_rows = ""
         for c in convs_data:
