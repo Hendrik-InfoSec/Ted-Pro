@@ -622,28 +622,30 @@ def direct_price_answer(query: str, all_products: list) -> str | None:
 def detect_fake_products(ai_response: str, real_products: list) -> bool:
     """
     Returns True if the AI response mentions a product name that does NOT
-    exist in the real catalog — a hallucination. Used to catch and replace
-    invented product names before they reach the customer.
+    exist in the real catalog. Generic across all business types.
     """
     if not real_products:
         return False
-    real_names = set()
+    import re as _re
+    real_words = set()
     for p in real_products:
-        nm = (p.get("name") or "").lower()
+        nm = (p.get("name") or "").lower().strip()
         for w in nm.split():
             w2 = "".join(c for c in w if c.isalnum())
             if len(w2) >= 3:
-                real_names.add(w2)
-    # Look for "<Word> Bear/Bunny/Unicorn..." patterns the AI may invent
-    import re as _re
-    suspicious = _re.findall(
-        r"([A-Z][a-z]+)\s+(?:Bear|Bunny|Unicorn|Dino|Dinosaur|Teddy|Triceratops)",
-        ai_response
-    )
-    for word in suspicious:
-        w2 = word.lower()
-        if len(w2) >= 3 and w2 not in real_names and w2 not in ("the","our","a","two","new","cute","soft"):
-            logger.warning(f"Hallucinated product name detected: '{word}'")
+                real_words.add(w2)
+    candidates = _re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", ai_response)
+    ignore = {
+        "South Africa", "Free Delivery", "Same Day", "Next Day",
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+        "Saturday", "Sunday", "Please Note", "Thank You",
+    }
+    for candidate in candidates:
+        if candidate in ignore:
+            continue
+        cwords = ["".join(c for c in w if c.isalnum()) for w in candidate.lower().split() if len(w) >= 3]
+        if cwords and not any(w in real_words for w in cwords):
+            logger.warning(f"Possible hallucinated product name: '{candidate}'")
             return True
     return False
 
@@ -2090,6 +2092,9 @@ def _login_page(icon: str, title: str, action: str, error: str = "") -> str:
         '</div>'
         '<button type="submit" class="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF922B] '
         'to-[#FF8C42] text-white font-bold shadow-md text-sm">Login</button>'
+        f'<p class="text-center text-xs text-[#8B6914] mt-3">'
+        f'<a href="/admin/forgot?client={action.split(chr(61))[-1] if chr(61) in action else chr(34)+chr(34)}" '
+        'style="color:#FF922B;text-decoration:underline">Forgot your password?</a></p>'
         '</form></div></div>'
         '<script>function togglePw(){var i=document.getElementById("pw-field"),b=document.getElementById("pw-toggle");if(!i||!b)return;if(i.type==="password"){i.type="text";b.innerHTML="👁️🚫";b.title="Hide password";}else{i.type="password";b.innerHTML="👁️";b.title="Show password";}}</script>'
     )
@@ -2483,6 +2488,192 @@ async def admin_reverify(request: Request, password: str = Form(...)):
         request.session["admin_verified"] = True
         return HTMLResponse("OK")
     return HTMLResponse("Wrong password", status_code=403)
+
+
+
+# ---------------------------------------------------------------------------
+# Password reset — clients recover access without manual Supabase edits.
+# Token-based, single-use, expires in 1 hour.
+# ---------------------------------------------------------------------------
+import time as _time
+
+_reset_tokens: dict = {}
+_RESET_TOKEN_TTL = 3600
+
+
+def _clean_expired_tokens():
+    now = _time.time()
+    expired = [t for t, v in _reset_tokens.items() if v["expires"] < now]
+    for t in expired:
+        del _reset_tokens[t]
+
+
+def _send_reset_email(to_email: str, business_name: str, reset_url: str):
+    try:
+        gmail_user = os.environ.get("GMAIL_USER")
+        gmail_pass = os.environ.get("GMAIL_APP_PASSWORD")
+        if not gmail_user or not gmail_pass:
+            logger.error("Cannot send reset email: Gmail credentials not set")
+            return
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "Reset your TedPro password"
+        msg["From"] = f"TedPro <{gmail_user}>"
+        msg["To"] = to_email
+        html = (
+            "<html><body style='font-family:sans-serif;background:#FFF9F4;padding:20px'>"
+            "<div style='max-width:500px;margin:0 auto;background:white;padding:30px;border-radius:20px'>"
+            "<div style='text-align:center;font-size:48px'>&#128273;</div>"
+            f"<h2 style='color:#2D1B00;text-align:center'>Reset your password</h2>"
+            f"<p style='color:#5A3A1B'>You requested a password reset for <strong>{business_name}</strong>.</p>"
+            "<p style='color:#5A3A1B'>Click below to set a new password. This link expires in 1 hour.</p>"
+            f"<div style='text-align:center;margin:24px 0'>"
+            f"<a href='{reset_url}' style='background:#FF922B;color:white;padding:14px 32px;"
+            "border-radius:30px;text-decoration:none;font-weight:700;font-size:15px'>Reset password</a></div>"
+            "<p style='color:#8B6914;font-size:12px'>If you did not request this, ignore this email.</p>"
+            "</div></body></html>"
+        )
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(gmail_user, gmail_pass)
+            s.sendmail(gmail_user, to_email, msg.as_string())
+        logger.info(f"Password reset email sent to {to_email}")
+    except Exception as e:
+        logger.error(f"_send_reset_email error: {e}")
+
+
+@app.get("/admin/forgot", response_class=HTMLResponse)
+async def forgot_password_page(request: Request, client: str = ""):
+    cesc = _esc_html(client)
+    return HTMLResponse(content=render_page("Reset Password", (
+        '<div class="min-h-screen flex items-center justify-center">'
+        '<div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] w-full max-w-sm">'
+        '<div class="text-center mb-6"><div class="text-4xl">&#128273;</div>'
+        '<h1 class="text-xl font-bold text-[#2D1B00] mt-2">Reset your password</h1>'
+        '<p class="text-sm text-[#8B6914] mt-1">Enter your email and we will send a reset link.</p></div>'
+        f'<form method="post" action="/admin/forgot" class="space-y-4">'
+        f'<input type="hidden" name="client_id" value="{cesc}">'
+        '<input type="email" name="email" placeholder="Your account email" required '
+        'class="w-full px-4 py-3 rounded-xl border border-[#FFD5A5] bg-[#FFF9F4] text-sm">'
+        '<button type="submit" class="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF922B] '
+        'to-[#FF8C42] text-white font-bold shadow-md text-sm">Send reset link</button>'
+        f'<p class="text-center text-xs text-[#8B6914] mt-2">'
+        f'<a href="/admin?client={cesc}" style="color:#FF922B;text-decoration:underline">Back to login</a></p>'
+        '</form></div></div>'
+    )))
+
+
+@app.post("/admin/forgot", response_class=HTMLResponse)
+async def forgot_password_submit(request: Request, email: str = Form(...), client_id: str = Form("")):
+    _clean_expired_tokens()
+    success = (
+        '<div class="min-h-screen flex items-center justify-center">'
+        '<div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] w-full max-w-sm text-center">'
+        '<div class="text-4xl mb-4">&#128236;</div>'
+        '<h1 class="text-xl font-bold text-[#2D1B00]">Check your inbox</h1>'
+        '<p class="text-sm text-[#8B6914] mt-2">If that email matches an account, '
+        'a reset link is on its way. Check spam too.</p>'
+        '</div></div>'
+    )
+    try:
+        cid = client_id.strip() if client_id else None
+        if cid:
+            sb = _get_supabase()
+            acct = tenancy.get_account(sb, cid)
+            if acct:
+                import secrets as _sec
+                token = _sec.token_urlsafe(32)
+                _reset_tokens[token] = {"client_id": cid, "expires": _time.time() + _RESET_TOKEN_TTL}
+                base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
+                reset_url = f"{base}/admin/reset?token={token}"
+                biz = acct.get("business_name", "your business")
+                _send_reset_email(email.strip(), biz, reset_url)
+    except Exception as e:
+        logger.error(f"forgot_password_submit error: {e}")
+    return HTMLResponse(content=render_page("Reset Password", success))
+
+
+@app.get("/admin/reset", response_class=HTMLResponse)
+async def reset_password_page(request: Request, token: str = ""):
+    _clean_expired_tokens()
+    token_data = _reset_tokens.get(token)
+    expired_html = (
+        '<div class="min-h-screen flex items-center justify-center">'
+        '<div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] w-full max-w-sm text-center">'
+        '<div class="text-4xl mb-4">&#9200;</div>'
+        '<h1 class="text-xl font-bold text-[#2D1B00]">Link expired</h1>'
+        '<p class="text-sm text-[#8B6914] mt-2">This reset link has expired or already been used.</p>'
+        '<a href="/admin" class="inline-block mt-4 text-sm text-[#FF922B] underline">Back to login</a>'
+        '</div></div>'
+    )
+    if not token_data or token_data["expires"] < _time.time():
+        return HTMLResponse(content=render_page("Reset Password", expired_html))
+    tesc = _esc_html(token)
+    return HTMLResponse(content=render_page("Reset Password", (
+        '<div class="min-h-screen flex items-center justify-center">'
+        '<div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] w-full max-w-sm">'
+        '<div class="text-center mb-6"><div class="text-4xl">&#128272;</div>'
+        '<h1 class="text-xl font-bold text-[#2D1B00] mt-2">Set new password</h1></div>'
+        f'<form method="post" action="/admin/reset" class="space-y-4">'
+        f'<input type="hidden" name="token" value="{tesc}">'
+        '<div style="position:relative">'
+        '<input type="password" id="new-pw" name="password" placeholder="New password (min 6 chars)" required '
+        'class="w-full px-4 py-3 rounded-xl border border-[#FFD5A5] bg-[#FFF9F4] text-sm pr-12">'
+        '<button type="button" '
+        'onclick="var i=document.getElementById(\'new-pw\');i.type=i.type===\'password\'?\'text\':\'password\';" '
+        'style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;color:#8B6914">&#128065;</button>'
+        '</div>'
+        '<button type="submit" class="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF922B] '
+        'to-[#FF8C42] text-white font-bold shadow-md text-sm">Set new password</button>'
+        '</form></div></div>'
+    )))
+
+
+@app.post("/admin/reset", response_class=HTMLResponse)
+async def reset_password_submit(request: Request, token: str = Form(...), password: str = Form(...)):
+    _clean_expired_tokens()
+    token_data = _reset_tokens.get(token)
+    if not token_data or token_data["expires"] < _time.time():
+        return HTMLResponse(content=render_page("Reset Password", (
+            '<div class="min-h-screen flex items-center justify-center">'
+            '<div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] w-full max-w-sm text-center">'
+            '<div class="text-4xl mb-4">&#9200;</div>'
+            '<h1 class="text-xl font-bold text-[#2D1B00]">Link expired</h1>'
+            '<p class="text-sm text-[#8B6914] mt-2">Please request a new reset link.</p>'
+            '<a href="/admin" class="inline-block mt-4 text-sm text-[#FF922B] underline">Back to login</a>'
+            '</div></div>'
+        )))
+    if len(password.strip()) < 6:
+        tesc = _esc_html(token)
+        return HTMLResponse(content=render_page("Reset Password", (
+            '<div class="min-h-screen flex items-center justify-center">'
+            '<div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] w-full max-w-sm text-center">'
+            '<div class="text-4xl mb-4">&#9888;&#65039;</div>'
+            '<h1 class="text-xl font-bold text-[#2D1B00]">Password too short</h1>'
+            '<p class="text-sm text-[#8B6914] mt-2">Please use at least 6 characters.</p>'
+            f'<a href="/admin/reset?token={tesc}" class="inline-block mt-4 text-sm text-[#FF922B] underline">Try again</a>'
+            '</div></div>'
+        )))
+    try:
+        cid = token_data["client_id"]
+        new_hash = tenancy._hash_password(password.strip())
+        sb = _get_supabase()
+        sb.table("accounts").update({"admin_password_hash": new_hash}).eq("client_id", cid).execute()
+        del _reset_tokens[token]
+        logger.info(f"Password reset successful for {cid}")
+        return HTMLResponse(content=render_page("Reset Password", (
+            '<div class="min-h-screen flex items-center justify-center">'
+            '<div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] w-full max-w-sm text-center">'
+            '<div class="text-4xl mb-4">&#9989;</div>'
+            '<h1 class="text-xl font-bold text-[#2D1B00]">Password updated</h1>'
+            '<p class="text-sm text-[#8B6914] mt-2">Your password has been changed. You can now log in.</p>'
+            f'<a href="/admin?client={cid}" class="inline-block mt-4 py-3 px-8 rounded-xl '
+            'bg-gradient-to-r from-[#FF922B] to-[#FF8C42] text-white font-bold text-sm">Go to login</a>'
+            '</div></div>'
+        )))
+    except Exception as e:
+        logger.error(f"reset_password_submit error: {e}")
+        return HTMLResponse("Something went wrong. Please try again.", status_code=500)
+
 
 
 @app.post("/admin/login", response_class=HTMLResponse)
