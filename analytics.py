@@ -214,17 +214,21 @@ def render_dashboard(metrics: dict, business_name: str = "Your Business", order_
             f"{order_metrics.get('attribution_rate',0)}% attribution rate</div></div>"
         )
 
-    # Headline ROI card — the number that sells the product
+    # No-orders placeholder — honest, tells the client what to do next
     hero = (
-        f"<div style='background:linear-gradient(135deg,#FF922B,#FF8C42);color:white;"
-        f"border-radius:20px;padding:28px;margin-bottom:20px'>"
-        f"<div style='font-size:13px;text-transform:uppercase;letter-spacing:.08em;opacity:.9'>"
-        f"Estimated pipeline Teddy influenced \u00b7 last {days} days</div>"
-        f"<div style='font-size:44px;font-weight:800;margin-top:8px'>{cur} {pipeline:,.0f}</div>"
-        f"<div style='font-size:13px;opacity:.9;margin-top:6px'>"
-        f"From {metrics.get('buying_moments',0)} buying-intent conversations "
-        f"\u00d7 {cur} {metrics.get('avg_product_price',0):,.0f} average order value</div></div>"
-    )
+        "<div style='background:#FFF9F4;border:2px dashed #FFD5A5;"
+        "border-radius:20px;padding:28px;margin-bottom:20px;text-align:center'>"
+        "<div style='font-size:32px;margin-bottom:10px'>&#128230;</div>"
+        "<div style='font-size:15px;font-weight:700;color:#2D1B00;margin-bottom:8px'>"
+        "No orders tracked yet</div>"
+        "<div style='font-size:13px;color:#8B6914;line-height:1.6;max-width:400px;margin:0 auto'>"
+        "Connect your store's webhook to start tracking real sales attributed to Teddy. "
+        "Once connected, you'll see exactly how much revenue Teddy is generating.</div>"
+        "<a href='/admin' style='display:inline-block;margin-top:14px;padding:10px 24px;"
+        "background:#FF922B;color:white;border-radius:20px;font-size:13px;"
+        "font-weight:700;text-decoration:none'>Get your webhook URL →</a>"
+        "</div>"
+    ) if not (order_metrics and order_metrics.get('orders_period', 0) > 0) else ""
 
     cards = (
         "<div style='display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px'>"
@@ -289,12 +293,7 @@ def render_dashboard(metrics: dict, business_name: str = "Your Business", order_
         "</div>"
     )
 
-    note = (
-        "<p style='font-size:11px;color:#8B6914;margin-top:16px;line-height:1.5'>"
-        "Pipeline is a conservative estimate: buying-intent conversations \u00d7 your average "
-        "order value. It reflects demand Teddy engaged with, not guaranteed sales. "
-        "As order tracking is connected, this becomes actual attributed revenue.</p>"
-    )
+    note = ""
 
     return (
         f"<div style='max-width:900px'>"
