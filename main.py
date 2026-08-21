@@ -2486,6 +2486,37 @@ async def export_conversations(request: Request):
         return HTMLResponse(f"Export failed: {e}", status_code=500)
 
 
+@app.get("/admin/leads/export")
+async def export_leads(request: Request):
+    """Download all captured leads as CSV."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    try:
+        import io, csv as csv_mod
+        from fastapi.responses import Response
+        sb = _get_supabase()
+        rows = sb.table("leads").select("*").eq("client_id", admin_client(request))             .order("timestamp", desc=True).execute().data or []
+        output = io.StringIO()
+        writer = csv_mod.writer(output)
+        writer.writerow(["date", "name", "email", "context"])
+        for r in rows:
+            writer.writerow([
+                str(r.get("timestamp", ""))[:19],
+                r.get("name", ""),
+                r.get("email", ""),
+                r.get("context", ""),
+            ])
+        filename = f"leads_{datetime.now().strftime('%Y%m%d')}.csv"
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logger.error(f"Leads export error: {e}")
+        return HTMLResponse(f"Export failed: {e}", status_code=500)
+
+
 @app.post("/admin/reverify", response_class=HTMLResponse)
 async def admin_reverify(request: Request, password: str = Form(...)):
     """Re-verification for sensitive actions. Checks THIS client's own password,
@@ -3113,7 +3144,9 @@ async def _admin_dashboard(request: Request):
                     "<td class='px-4 py-3 text-sm text-[#8B6914] italic'>" + interest + "</td>"
                     "<td class='px-4 py-3 text-xs text-[#8B6914] whitespace-nowrap'>" + date + "</td></tr>"
                 )
-            return card("&#128101; All Leads (" + str(len(leads_data)) + ")", 
+            return card("&#128101; All Leads (" + str(len(leads_data)) + ") "
+                        "<a href='/admin/leads/export' style='font-size:12px;font-weight:600;"
+                        "color:#FF922B;text-decoration:none;margin-left:8px'>&#128229; Export CSV</a>", 
                        ["Name", "Email", "First asked about", "Date"], lead_rows_html)
 
         leads_panel = build_leads_panel()
