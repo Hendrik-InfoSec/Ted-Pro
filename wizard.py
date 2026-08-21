@@ -107,6 +107,9 @@ def _step_body(step: int, base_url: str, cid: str, biz: str, primary: str) -> st
 <input name="business_name" placeholder="e.g. Acme Plush Toys" value="{biz}" required>
 <label>Business type (optional)</label>
 <input name="business_type" placeholder="e.g. Online toy store">
+<label>Your email address</label>
+<input name="admin_email" type="email" placeholder="you@yourbusiness.com" required>
+<p class="hint">Used to send your password reset link if you ever get locked out.</p>
 <label>Admin password</label>
 <div style="position:relative">
 <input id="wiz-pw" name="admin_password" type="password" placeholder="Choose a password to manage your assistant" required style="padding-right:40px">
