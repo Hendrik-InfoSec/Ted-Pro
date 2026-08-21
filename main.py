@@ -2517,6 +2517,41 @@ async def export_leads(request: Request):
         return HTMLResponse(f"Export failed: {e}", status_code=500)
 
 
+@app.get("/admin/orders/export")
+async def export_orders(request: Request):
+    """Download all orders as CSV."""
+    if not request.session.get("admin_authenticated"):
+        return RedirectResponse(url="/admin", status_code=303)
+    try:
+        import io, csv as csv_mod
+        from fastapi.responses import Response
+        sb = _get_supabase()
+        acid = admin_client(request)
+        rows = sb.table("orders").select("*").eq("client_id", acid)             .order("created_at", desc=True).execute().data or []
+        output = io.StringIO()
+        writer = csv_mod.writer(output)
+        writer.writerow(["date", "order_number", "email", "amount", "currency", "status", "attributed"])
+        for r in rows:
+            writer.writerow([
+                str(r.get("created_at", ""))[:19],
+                r.get("order_number", ""),
+                r.get("email", ""),
+                r.get("amount", ""),
+                r.get("currency", "ZAR"),
+                r.get("status", ""),
+                "Yes" if r.get("attributed") else "No",
+            ])
+        filename = f"orders_{datetime.now().strftime('%Y%m%d')}.csv"
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logger.error(f"Orders export error: {e}")
+        return HTMLResponse(f"Export failed: {e}", status_code=500)
+
+
 @app.post("/admin/reverify", response_class=HTMLResponse)
 async def admin_reverify(request: Request, password: str = Form(...)):
     """Re-verification for sensitive actions. Checks THIS client's own password,
@@ -3038,7 +3073,7 @@ def _build_orders_panel(acid: str, sb) -> str:
         "<div class='px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center'>"
         "<h2 class='font-bold text-[#2D1B00] text-sm'>&#128230; Orders "
         "<span class='ml-2 text-xs font-normal text-[#8B6914]'>(" + str(len(orders)) + ")</span></h2>"
-        "<a href='/admin/orders/test' class='text-xs text-[#FF922B] hover:underline font-semibold'>&#129514; Push test order</a>"
+        "<a href='/admin/orders/export' class='text-xs text-[#FF922B] hover:underline font-semibold mr-3'>&#128229; Export CSV</a>""<a href='/admin/orders/test' class='text-xs text-[#FF922B] hover:underline font-semibold'>&#129514; Push test order</a>"
         "</div>"
         "<div class='overflow-x-auto'><table class='w-full'>"
         "<thead class='bg-[#FFF9F4]'><tr>"
