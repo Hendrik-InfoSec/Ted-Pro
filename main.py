@@ -623,6 +623,8 @@ def detect_fake_products(ai_response: str, real_products: list) -> bool:
     """
     Returns True if the AI response mentions a product name that does NOT
     exist in the real catalog. Generic across all business types.
+    Only triggers when ALL words in a candidate phrase are absent from
+    real product names — prevents false positives on common phrases.
     """
     if not real_products:
         return False
@@ -635,18 +637,38 @@ def detect_fake_products(ai_response: str, real_products: list) -> bool:
             if len(w2) >= 3:
                 real_words.add(w2)
     candidates = _re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", ai_response)
-    ignore = {
-        "South Africa", "Free Delivery", "Same Day", "Next Day",
-        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-        "Saturday", "Sunday", "Please Note", "Thank You",
+    # Common phrases that are Title Case but not product names
+    ignore_words = {
+        "south", "africa", "free", "delivery", "same", "next", "day",
+        "monday", "tuesday", "wednesday", "thursday", "friday",
+        "saturday", "sunday", "january", "february", "march", "april",
+        "may", "june", "july", "august", "september", "october",
+        "november", "december", "please", "note", "thank", "you",
+        "johannesburg", "cape", "town", "durban", "pretoria",
+        "sorry", "great", "sure", "here", "our", "your", "this",
+        "that", "with", "from", "for", "the", "and", "not", "any",
+        "ask", "feel", "let", "know", "would", "like", "help",
+        "available", "stock", "order", "orders", "business", "days",
+        "contact", "whatsapp", "email", "phone", "call", "team",
+        "currently", "also", "offer", "offers", "options", "option",
     }
     for candidate in candidates:
-        if candidate in ignore:
+        # Strip leading articles before analysis
+        stripped = candidate
+        for article in ("The ", "A ", "An ", "Our ", "Your "):
+            if stripped.startswith(article):
+                stripped = stripped[len(article):]
+                break
+        cwords = ["".join(c for c in w if c.isalnum()).lower() for w in stripped.split() if len(w) >= 3]
+        # Skip if any word is a known common phrase word
+        if any(w in ignore_words for w in cwords):
             continue
-        cwords = ["".join(c for c in w if c.isalnum()) for w in candidate.lower().split() if len(w) >= 3]
-        if cwords and not any(w in real_words for w in cwords):
-            logger.warning(f"Possible hallucinated product name: '{candidate}'")
-            return True
+        # Skip if any word matches a real product word
+        if any(w in real_words for w in cwords):
+            continue
+        # All words are unknown AND not common — likely hallucination
+        logger.warning(f"Possible hallucinated product name: '{candidate}'")
+        return True
     return False
 
 
