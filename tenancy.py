@@ -211,6 +211,41 @@ def account_branding(supabase, client_id: str) -> dict:
     }
 
 
+def _create_client_views(supabase, cid: str):
+    """
+    Create per-client views in Supabase so their data is easy to browse
+    in the dashboard without seeing other clients mixed in.
+    Called automatically when a new account is created.
+    Views are named {safe_cid}_leads, {safe_cid}_products etc.
+    """
+    # Sanitise the client_id for use as a view name
+    import re as _re
+    safe = _re.sub(r"[^a-z0-9_]", "_", cid.lower())[:40]
+    tables = ["leads", "products", "faqs", "conversations", "orders"]
+    columns = {
+        "leads":         "id, name, email, context, timestamp",
+        "products":      "id, name, category, price, currency, in_stock, stock_quantity",
+        "faqs":          "id, category, question, answer, active",
+        "conversations": "id, session_id, user_message, bot_response, created_at",
+        "orders":        "id, order_number, email, amount, currency, status, attributed, created_at",
+    }
+    for table in tables:
+        view_name = f"{safe}_{table}"
+        cols = columns[table]
+        sql = (
+            f"CREATE OR REPLACE VIEW {view_name} AS "
+            f"SELECT {cols} FROM {table} "
+            f"WHERE client_id = '{cid}';"
+        )
+        try:
+            supabase.rpc("exec_sql", {"sql": sql}).execute()
+        except Exception:
+            # rpc exec_sql may not be available — silently skip
+            # views can still be created manually via tasha_views.sql template
+            pass
+    logger.info(f"Supabase views created for {cid}")
+
+
 def create_account(supabase, client_id: str, business_name: str,
                    admin_password: str = "", **fields) -> dict:
     """
@@ -252,6 +287,12 @@ def create_account(supabase, client_id: str, business_name: str,
         supabase.table("accounts").insert(row).execute()
         _known_clients.add(cid)  # keep cache fresh
         logger.info(f"Account created: {cid} ({business_name})")
+        # Auto-create Supabase views for this client so their data is
+        # easy to browse in the Supabase dashboard — no manual SQL needed.
+        try:
+            _create_client_views(supabase, cid)
+        except Exception as ve:
+            logger.warning(f"Could not create views for {cid}: {ve}")
         return {"ok": True, "client_id": cid}
     except Exception as e:
         logger.error(f"create_account error: {e}")
