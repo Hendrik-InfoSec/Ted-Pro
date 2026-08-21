@@ -237,6 +237,7 @@ def create_account(supabase, client_id: str, business_name: str,
         "voucher_code": fields.get("voucher_code", ""),
         "primary_color": fields.get("primary_color", "#FF922B"),
         "logo_url": fields.get("logo_url", ""),
+        "admin_email": fields.get("admin_email", ""),
         "webhook_secret": _secrets.token_urlsafe(32),
         "admin_password_hash": _hash_password(admin_password) if admin_password else "",
         # billing-ready defaults — present now, enforced later
