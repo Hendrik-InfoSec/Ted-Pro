@@ -2552,10 +2552,8 @@ async def forgot_password_page(request: Request, client: str = ""):
         '<p class="text-sm text-[#8B6914] mt-1">Enter your email and we will send a reset link.</p></div>'
         f'<form method="post" action="/admin/forgot" class="space-y-4">'
         f'<input type="hidden" name="client_id" value="{cesc}">'
-        '<input type="email" name="email" placeholder="Your account email" required '
-        'class="w-full px-4 py-3 rounded-xl border border-[#FFD5A5] bg-[#FFF9F4] text-sm">'
         '<button type="submit" class="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF922B] '
-        'to-[#FF8C42] text-white font-bold shadow-md text-sm">Send reset link</button>'
+        'to-[#FF8C42] text-white font-bold shadow-md text-sm">Send reset link to my email</button>'
         f'<p class="text-center text-xs text-[#8B6914] mt-2">'
         f'<a href="/admin?client={cesc}" style="color:#FF922B;text-decoration:underline">Back to login</a></p>'
         '</form></div></div>'
@@ -2563,15 +2561,14 @@ async def forgot_password_page(request: Request, client: str = ""):
 
 
 @app.post("/admin/forgot", response_class=HTMLResponse)
-async def forgot_password_submit(request: Request, email: str = Form(...), client_id: str = Form("")):
+async def forgot_password_submit(request: Request, client_id: str = Form("")):
     _clean_expired_tokens()
     success = (
         '<div class="min-h-screen flex items-center justify-center">'
         '<div class="bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] w-full max-w-sm text-center">'
         '<div class="text-4xl mb-4">&#128236;</div>'
         '<h1 class="text-xl font-bold text-[#2D1B00]">Check your inbox</h1>'
-        '<p class="text-sm text-[#8B6914] mt-2">If that email matches an account, '
-        'a reset link is on its way. Check spam too.</p>'
+        '<p class="text-sm text-[#8B6914] mt-2">A reset link is on its way to your registered email. Check spam too.</p>'
         '</div></div>'
     )
     try:
@@ -2580,13 +2577,17 @@ async def forgot_password_submit(request: Request, email: str = Form(...), clien
             sb = _get_supabase()
             acct = tenancy.get_account(sb, cid)
             if acct:
+                to_email = acct.get("admin_email", "").strip()
+                if not to_email:
+                    logger.warning(f"No admin_email on account {cid} — cannot send reset")
+                    return HTMLResponse(content=render_page("Reset Password", success))
                 import secrets as _sec
                 token = _sec.token_urlsafe(32)
                 _reset_tokens[token] = {"client_id": cid, "expires": _time.time() + _RESET_TOKEN_TTL}
                 base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
                 reset_url = f"{base}/admin/reset?token={token}"
                 biz = acct.get("business_name", "your business")
-                _send_reset_email(email.strip(), biz, reset_url)
+                _send_reset_email(to_email, biz, reset_url)
     except Exception as e:
         logger.error(f"forgot_password_submit error: {e}")
     return HTMLResponse(content=render_page("Reset Password", success))
@@ -3306,7 +3307,8 @@ async def setup_wizard(request: Request):
 
 @app.post("/setup/step1", response_class=HTMLResponse)
 async def setup_step1(request: Request, business_name: str = Form(...),
-                      admin_password: str = Form(...), business_type: str = Form("")):
+                      admin_password: str = Form(...), business_type: str = Form(""),
+                      admin_email: str = Form("")):
     """Create the account, then advance to branding."""
     base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
     sb = _get_supabase()
@@ -3319,7 +3321,7 @@ async def setup_step1(request: Request, business_name: str = Form(...),
         n += 1
     result = tenancy.create_account(
         sb, cid, business_name, admin_password=admin_password,
-        business_type=business_type,
+        business_type=business_type, admin_email=admin_email.strip().lower(),
     )
     if not result.get("ok"):
         return HTMLResponse(wizard.render_wizard(base, step=1, error=result.get("error", "Could not create account")))
