@@ -2074,7 +2074,7 @@ async def clear_chat(request: Request):
 # ---------------------------------------------------------------------------
 # Admin — login helpers
 # ---------------------------------------------------------------------------
-def _login_page(icon: str, title: str, action: str, error: str = "") -> str:
+def _login_page(icon: str, title: str, action: str, error: str = "", client: str = "") -> str:
     err_html = f'<p class="text-red-500 text-sm mt-2">{error}</p>' if error else ""
     return (
         '<div class="min-h-screen flex items-center justify-center">'
@@ -2093,7 +2093,7 @@ def _login_page(icon: str, title: str, action: str, error: str = "") -> str:
         '<button type="submit" class="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF922B] '
         'to-[#FF8C42] text-white font-bold shadow-md text-sm">Login</button>'
         f'<p class="text-center text-xs text-[#8B6914] mt-3">'
-        f'<a href="/admin/forgot?client={action.split(chr(61))[-1] if chr(61) in action else chr(34)+chr(34)}" '
+        f'<a href="/admin/forgot?client={client}" '
         'style="color:#FF922B;text-decoration:underline">Forgot your password?</a></p>'
         '</form></div></div>'
         '<script>function togglePw(){var i=document.getElementById("pw-field"),b=document.getElementById("pw-toggle");if(!i||!b)return;if(i.type==="password"){i.type="text";b.innerHTML="👁️🚫";b.title="Hide password";}else{i.type="password";b.innerHTML="👁️";b.title="Show password";}}</script>'
@@ -2299,7 +2299,7 @@ async def admin_page(request: Request):
                     action = "/admin/login"
             except Exception:
                 pass
-        return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", title, action), include_admin_js=True))
+        return HTMLResponse(content=render_page("Admin Login", _login_page("\U0001f512", title, action, client=cid or ""), include_admin_js=True))
     return await _admin_dashboard(request)
 
 @app.get("/admin/conversations/rows", response_class=HTMLResponse)
@@ -2693,14 +2693,14 @@ async def admin_login(request: Request, password: str = Form(...)):
         except Exception as e:
             logger.error(f"per-client login error: {e}")
         return HTMLResponse(content=render_page("Admin Login",
-            _login_page("\U0001f512", "Admin Access", f"/admin/login?client={cid}", "Incorrect password."), include_admin_js=True))
+            _login_page("\U0001f512", "Admin Access", f"/admin/login?client={cid}", "Incorrect password.", client=cid), include_admin_js=True))
     # Legacy global admin
     if hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")):
         request.session["admin_authenticated"] = True
         request.session["client_id"] = CLIENT_ID
         return RedirectResponse(url="/admin", status_code=303)
     return HTMLResponse(content=render_page("Admin Login",
-        _login_page("\U0001f512", "Admin Access", "/admin/login", "Incorrect password."), include_admin_js=True))
+        _login_page("\U0001f512", "Admin Access", "/admin/login", "Incorrect password.", client=""), include_admin_js=True))
 
 @app.get("/admin/logout")
 async def admin_logout(request: Request):
