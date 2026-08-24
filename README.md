@@ -2,7 +2,8 @@
 
 **A production-grade, multi-tenant SaaS platform** that embeds an AI sales assistant into any business website. Built from scratch by [Hendrik Selogilwe](https://github.com/Hendrik-InfoSec).
 
-🔗 **Live:** https://ted-pro.onrender.com
+🔗 **Live app:** https://ted-pro.onrender.com
+🔗 **See it embedded on a real site:** https://hendrik-infosec.github.io/cuddleheros-demo/
 
 ---
 
