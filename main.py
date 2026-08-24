@@ -3553,12 +3553,15 @@ async def chat_widget(request: Request):
     _biz_color = _brand.get("primary_color") or "#FF922B"
     if not sid:
         return HTMLResponse("""<!DOCTYPE html><html><head><meta charset="utf-8"><script>
-var s=localStorage.getItem('tpro_sid');
-var t=localStorage.getItem('tpro_sid_ts');
+var _cp=new URLSearchParams(location.search).get('client')||'default';
+var _skey='tpro_sid_'+_cp;
+var _tkey='tpro_sid_ts_'+_cp;
+var s=localStorage.getItem(_skey);
+var t=localStorage.getItem(_tkey);
 var _24h=24*60*60*1000;
-if(s&&t&&(Date.now()-parseInt(t,10)>_24h)){localStorage.removeItem('tpro_sid');localStorage.removeItem('tpro_sid_ts');s=null;}
-if(!s){s='w'+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);localStorage.setItem('tpro_sid',s);localStorage.setItem('tpro_sid_ts',Date.now().toString());}
-var _cp=new URLSearchParams(location.search).get('client');location.replace('/chat-widget?sid='+encodeURIComponent(s)+(_cp?('&client='+encodeURIComponent(_cp)):''));
+if(s&&t&&(Date.now()-parseInt(t,10)>_24h)){localStorage.removeItem(_skey);localStorage.removeItem(_tkey);s=null;}
+if(!s){s='w'+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);localStorage.setItem(_skey,s);localStorage.setItem(_tkey,Date.now().toString());}
+location.replace('/chat-widget?sid='+encodeURIComponent(s)+(_cp!=='default'?('&client='+encodeURIComponent(_cp)):''));
 </script></head><body></body></html>""")
 
     try:
