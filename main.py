@@ -3541,9 +3541,21 @@ async def embed_script():
 
 @app.get("/chat-widget", response_class=HTMLResponse)
 async def chat_widget(request: Request):
-    """Cookieless widget — session via localStorage, works on every site/browser/security setting."""
+    """Cookieless widget — session via localStorage, works on every site/browser/security setting.
+    IMPORTANT: never resolves via admin session — a widget visitor is anonymous
+    and must not inherit whichever client happens to be logged into /admin in
+    this browser. Only the explicit ?client= param (or the legacy default)
+    identifies which business this widget belongs to."""
     sid = request.query_params.get("sid", "")
-    widget_cid = client_for(request)
+    _url_client = request.query_params.get("client", "").strip()
+    if _url_client:
+        try:
+            _sb_check = _get_supabase()
+            widget_cid = _url_client if tenancy.account_exists(_sb_check, _url_client) else CLIENT_ID
+        except Exception:
+            widget_cid = CLIENT_ID
+    else:
+        widget_cid = CLIENT_ID
     # Per-account branding so each client's widget shows THEIR business, not CuddleHeros.
     try:
         _brand = tenancy.account_branding(_get_supabase(), widget_cid)
@@ -3751,6 +3763,9 @@ async def widget_chat(request: Request):
 
         # Resolve which business this widget belongs to. The embed script carries
         # ?client=<id>; the widget forwards it in the body as "client".
+        # NEVER falls back to the admin session — a widget visitor is anonymous
+        # and must not inherit whichever client is logged into /admin in this
+        # browser. No client param means the legacy default, full stop.
         body_client = str(body.get("client", "")).strip()
         if body_client:
             try:
@@ -3759,7 +3774,7 @@ async def widget_chat(request: Request):
             except Exception:
                 cid = CLIENT_ID
         else:
-            cid = client_for(request)
+            cid = CLIENT_ID
 
         # FIX #6: suspended/cancelled accounts stop serving (billing enforcement).
         # Legacy client (CuddleHeros) is never suspended via this path.
