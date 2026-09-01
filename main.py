@@ -568,14 +568,31 @@ def _fmt_price(p: dict) -> str:
 
 def direct_price_answer(query: str, all_products: list) -> str | None:
     """
-    For product/price questions, return an exact answer from the database — no AI.
-    Triggers on price words OR when the query clearly references products/categories.
-    Returns None only for genuinely vague/conversational messages.
+    For price/stock questions specifically, return an exact answer from the
+    database — no AI. Deliberately does NOT intercept questions about a
+    product's material, color, size, ingredients, or care — those need the
+    AI (with real PRODUCT INFO context) so it can either use real data or
+    honestly admit it doesn't have that detail, instead of being shoved into
+    a price template that ignores what was actually asked.
     """
     ql = query.lower()
+
+    # Questions about a NON-price attribute must never be intercepted here —
+    # let them fall through to the AI so the actual question gets answered
+    # (or honestly declined), not silently replaced with a price quote.
+    ATTRIBUTE_QUESTIONS = [
+        "made of", "made from", "material", "fabric", "ingredient",
+        "what is it made", "what's it made", "whats it made",
+        "color", "colour", "smell", "scent", "texture", "care instructions",
+        "how do i clean", "how to clean", "washable", "hypoallergenic",
+        "allergen", "contains", "what's in it", "whats in it",
+    ]
+    if any(kw in ql for kw in ATTRIBUTE_QUESTIONS):
+        return None
+
     is_price_q = any(kw in ql for kw in [
-        "how much", "price", "cost", "what's the", "whats the", "how many rand",
-        "what do", "going for", "charge", "expensive", "cheap"
+        "how much", "price", "cost", "how many rand",
+        "going for", "charge", "expensive", "cheap"
     ])
 
     matches = smart_match_products(query, all_products)
