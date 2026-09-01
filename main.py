@@ -4075,17 +4075,19 @@ async def widget_chat(request: Request):
             full = "Here's what we have: " + " • ".join(lines) + ". Which one would you like?"
 
         save_history_row(sid, prompt, full, cid)
+        # Deterministic handoff signal: the AI appends a fixed [[NEEDS_HANDOFF]]
+        # marker whenever it genuinely doesn't know something — never guessed
+        # from paraphrased free text, which is unreliable since the AI phrases
+        # "I don't know" differently every time.
+        _needs_handoff = "[[NEEDS_HANDOFF]]" in full
+        if _needs_handoff:
+            full = full.replace("[[NEEDS_HANDOFF]]", "").strip()
+
         resp = {"response": full}
         if show_lead:
             resp["show_lead"] = True
 
-        # If Ted admitted he doesn't have a detail, offer the real WhatsApp
-        # handoff as an optional extra — never replaces his answer or forces
-        # the customer away from the chat, just gives them a way to actually
-        # reach the team if they want it.
-        _dont_know_phrases = ("don't have that detail", "don't have that exact detail",
-                               "not sure about that", "don't have that information")
-        if any(p in full.lower() for p in _dont_know_phrases):
+        if _needs_handoff:
             try:
                 _b2 = tenancy.account_branding(_get_supabase(), cid)
                 _wa2 = (_b2.get("whatsapp_number") or "").strip()
