@@ -101,6 +101,10 @@ HANDOFF_KEYWORDS = [
     "representative", "someone real", "an actual person",
     "custom order", "bulk order", "corporate", "wedding", "event",
     "complaint", "damaged", "broken", "refund", "return", "exchange", "urgent",
+    # Ted's own honest fallback says "our team can help" — a customer replying
+    # with that exact word must trigger a real handoff, not get ignored.
+    "your team", "the team", "get me to", "connect me", "put me through",
+    "who can help", "someone to help", "help me find out",
 ]
 
 BUY_KEYWORDS = [
