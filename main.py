@@ -4057,6 +4057,23 @@ async def widget_chat(request: Request):
         resp = {"response": full}
         if show_lead:
             resp["show_lead"] = True
+
+        # If Ted admitted he doesn't have a detail, offer the real WhatsApp
+        # handoff as an optional extra — never replaces his answer or forces
+        # the customer away from the chat, just gives them a way to actually
+        # reach the team if they want it.
+        _dont_know_phrases = ("don't have that detail", "don't have that exact detail",
+                               "not sure about that", "don't have that information")
+        if any(p in full.lower() for p in _dont_know_phrases):
+            try:
+                _b2 = tenancy.account_branding(_get_supabase(), cid)
+                _wa2 = (_b2.get("whatsapp_number") or "").strip()
+                if _wa2:
+                    resp["handoff"] = True
+                    resp["whatsapp"] = f"https://wa.me/{_wa2}"
+            except Exception:
+                pass
+
         return JSONResponse(resp)
     except Exception as e:
         logger.error(f"widget_chat error: {e}")
