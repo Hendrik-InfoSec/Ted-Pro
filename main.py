@@ -1052,6 +1052,51 @@ def _render_product_row(p: dict) -> str:
 # ---------------------------------------------------------------------------
 # Upload card — drag-drop CSV uploader
 # ---------------------------------------------------------------------------
+SINGLE_PRODUCT_CARD = (
+    '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-6">'
+    '<div class="px-4 py-3 border-b border-[#FFE4CC]"><h2 class="font-bold text-[#2D1B00] text-sm">\u2795 Add or Edit One Product</h2>'
+    '<p style="font-size:12px;color:#8B6914;margin-top:4px">Quicker than a spreadsheet if you just have one item to add or fix.</p></div>'
+    '<form id="single-prod-form" method="post" action="/admin/products/single" class="p-4" style="display:grid;gap:12px;grid-template-columns:1fr 1fr">'
+    '<div><label style="font-size:12px;font-weight:600;color:#5A3A1B">Product name*</label>'
+    '<input name="name" required style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px"></div>'
+    '<div><label style="font-size:12px;font-weight:600;color:#5A3A1B">Category</label>'
+    '<input name="category" style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px"></div>'
+    '<div><label style="font-size:12px;font-weight:600;color:#5A3A1B">Price (ZAR)*</label>'
+    '<input name="price" type="number" step="0.01" required style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px"></div>'
+    '<div><label style="font-size:12px;font-weight:600;color:#5A3A1B">SKU (optional)</label>'
+    '<input name="sku" style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px"></div>'
+    '<div><label style="font-size:12px;font-weight:600;color:#5A3A1B">Material / what it\'s made of</label>'
+    '<input name="material" placeholder="e.g. 100% cotton, human hair, stainless steel" style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px"></div>'
+    '<div><label style="font-size:12px;font-weight:600;color:#5A3A1B">Size / dimensions (cm, optional)</label>'
+    '<input name="size_cm" type="number" style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px"></div>'
+    '<div style="grid-column:1/-1"><label style="font-size:12px;font-weight:600;color:#5A3A1B">Description (whatever customers usually ask about)</label>'
+    '<textarea name="description" rows="2" style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px;resize:vertical"></textarea></div>'
+    '<div><label style="font-size:12px;font-weight:600;color:#5A3A1B">In stock?</label>'
+    '<select name="in_stock" style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px">'
+    '<option value="true">Yes</option><option value="false">No</option></select></div>'
+    '<div><label style="font-size:12px;font-weight:600;color:#5A3A1B">Stock quantity</label>'
+    '<input name="stock_quantity" type="number" value="1" style="width:100%;padding:8px 10px;border:0.5px solid #FFD5A5;border-radius:8px;font-size:13px;margin-top:4px"></div>'
+    '<div style="grid-column:1/-1"><button type="submit" style="padding:9px 20px;background:#FF922B;color:white;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">Add product</button>'
+    '<span id="single-prod-msg" style="margin-left:10px;font-size:13px"></span></div>'
+    '</form>'
+    '<script>'
+    'document.getElementById("single-prod-form").addEventListener("submit",function(e){'
+    '  e.preventDefault();'
+    '  var fd=new FormData(this);'
+    '  var msg=document.getElementById("single-prod-msg");'
+    '  msg.textContent="Saving...";msg.style.color="#8B6914";'
+    '  fetch("/admin/products/single",{method:"POST",body:fd,credentials:"same-origin"})'
+    '  .then(function(r){return r.json();})'
+    '  .then(function(d){'
+    '    if(d.ok){msg.textContent="\u2705 Added! Reloading...";msg.style.color="#166534";setTimeout(function(){location.reload();},900);}'
+    '    else{msg.textContent="\u274c "+(d.error||"Something went wrong");msg.style.color="#991b1b";}'
+    '  }).catch(function(){msg.textContent="\u274c Network error";msg.style.color="#991b1b";});'
+    '});'
+    '</script>'
+    '</div>'
+)
+
+
 UPLOAD_CARD = (
     '<div class="bg-white rounded-xl shadow-sm border border-[#FFE4CC] overflow-hidden mb-6">'
     '<div class="px-4 py-3 border-b border-[#FFE4CC] flex justify-between items-center">'
@@ -2198,6 +2243,61 @@ async def toggle_stock(request: Request, product_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Admin — single product add (quicker than CSV for one item)
+# ---------------------------------------------------------------------------
+@app.post("/admin/products/single")
+async def add_single_product(
+    request: Request,
+    name: str = Form(...),
+    price: float = Form(...),
+    category: str = Form(""),
+    sku: str = Form(""),
+    material: str = Form(""),
+    size_cm: str = Form(""),
+    description: str = Form(""),
+    in_stock: str = Form("true"),
+    stock_quantity: str = Form("1"),
+):
+    acid = admin_client(request)
+    if not acid:
+        return JSONResponse({"ok": False, "error": "Not authenticated"}, status_code=401)
+    if not validate_csrf_token(request):
+        return JSONResponse({"ok": False, "error": "Invalid or missing CSRF token — please refresh and try again."}, status_code=403)
+    try:
+        name = name.strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "Product name is required"}, status_code=400)
+        try:
+            size_val = int(float(size_cm)) if size_cm.strip() else 0
+        except (ValueError, TypeError):
+            size_val = 0
+        try:
+            qty_val = int(float(stock_quantity)) if stock_quantity.strip() else 0
+        except (ValueError, TypeError):
+            qty_val = 0
+        sb = _get_supabase()
+        sb.table("products").insert({
+            "client_id": acid,
+            "name": name,
+            "category": category.strip(),
+            "price": price,
+            "currency": "ZAR",
+            "in_stock": in_stock.lower() == "true",
+            "description": description.strip(),
+            "material": material.strip(),
+            "size_cm": size_val,
+            "customisable": False,
+            "sku": sku.strip(),
+            "stock_quantity": qty_val,
+        }).execute()
+        logger.info(f"Single product added for {acid}: {name}")
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error(f"add_single_product error: {e}")
+        return JSONResponse({"ok": False, "error": "Something went wrong saving this product."}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
 # Admin — product upload
 # ---------------------------------------------------------------------------
 @app.post("/admin/products/upload", response_class=HTMLResponse)
@@ -3230,7 +3330,7 @@ async def _admin_dashboard(request: Request):
             "&#127987; Product Catalog <span class='ml-2 text-xs font-normal text-[#8B6914]'>(" + str(products_count) + " products — click row to expand)</span>",
             ["Name", "Category", "SKU", "Price", "Stock"],
             product_rows,
-        ) + UPLOAD_CARD
+        ) + SINGLE_PRODUCT_CARD + UPLOAD_CARD
 
         # ---- tab buttons: data-tab + onclick, zero quote-escaping needed ----
         def tab_button(tid, label, value, active=False):
