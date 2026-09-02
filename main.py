@@ -1998,6 +1998,7 @@ async def chat_response(request: Request):
             if not faq_ans:              # no FAQ answer → hand off
                 t = get_teddy_time()
                 ai_resp = "".join(get_engine(_chat_cid).stream_answer(query, chat_history=load_history(session_id, _chat_cid)))
+                ai_resp = ai_resp.replace("[[NEEDS_HANDOFF]]", "").strip()
                 final   = apply_teddy_vibes(ai_resp)
                 save_history_row(session_id, query, final, _chat_cid)
                 store["response"]   = final + "|||HANDOFF|||"
@@ -2091,6 +2092,15 @@ async def chat_response(request: Request):
 
         full_response = "".join(get_engine(_chat_cid).stream_answer(enhanced_query, chat_history=history_for_context))
         full_response = _strip_urls(full_response)
+
+        # Deterministic handoff signal (same mechanism as the widget): the AI
+        # appends a fixed [[NEEDS_HANDOFF]] marker whenever it genuinely
+        # doesn't know something. Strip it BEFORE anything else touches this
+        # text — never persisted, never rendered, never shown to a customer.
+        _needs_handoff = "[[NEEDS_HANDOFF]]" in full_response
+        if _needs_handoff:
+            full_response = full_response.replace("[[NEEDS_HANDOFF]]", "").strip()
+
         final = apply_teddy_vibes(full_response)
         t     = get_teddy_time()
 
@@ -2100,6 +2110,9 @@ async def chat_response(request: Request):
         store["time"]       = t
         store["ready"]      = True
         store["processing"] = False
+
+        if _needs_handoff:
+            return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble())
 
         return HTMLResponse(content=bot_bubble(final, t))
 
