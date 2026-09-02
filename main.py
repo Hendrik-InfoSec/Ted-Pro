@@ -4074,15 +4074,17 @@ async def widget_chat(request: Request):
                 lines.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({stk})")
             full = "Here's what we have: " + " • ".join(lines) + ". Which one would you like?"
 
-        save_history_row(sid, prompt, full, cid)
         # Deterministic handoff signal: the AI appends a fixed [[NEEDS_HANDOFF]]
         # marker whenever it genuinely doesn't know something — never guessed
         # from paraphrased free text, which is unreliable since the AI phrases
-        # "I don't know" differently every time.
+        # "I don't know" differently every time. Strip it BEFORE saving to
+        # history — the marker must never be persisted or shown to a customer,
+        # including on a later reload of this same conversation.
         _needs_handoff = "[[NEEDS_HANDOFF]]" in full
         if _needs_handoff:
             full = full.replace("[[NEEDS_HANDOFF]]", "").strip()
 
+        save_history_row(sid, prompt, full, cid)
         resp = {"response": full}
         if show_lead:
             resp["show_lead"] = True
