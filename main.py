@@ -635,7 +635,7 @@ def direct_price_answer(query: str, all_products: list) -> str | None:
             stock = "in stock" if p.get("in_stock") else "out of stock"
             lines.append(f"{p.get('name')} — {_fmt_price(p)} ({stock})")
         listing = " • ".join(lines)
-        return f"Here's what we have: {listing}. Which one would you like?"
+        return f"Yes, we've got a few! {listing}. Which one would you like?"
 
     return _single(matches[0][0])
 
@@ -1999,7 +1999,7 @@ async def chat_response(request: Request):
                 t = get_teddy_time()
                 ai_resp = "".join(get_engine(_chat_cid).stream_answer(query, chat_history=load_history(session_id, _chat_cid)))
                 ai_resp = ai_resp.replace("[[NEEDS_HANDOFF]]", "").strip()
-                final   = apply_teddy_vibes(ai_resp)
+                final   = ai_resp
                 save_history_row(session_id, query, final, _chat_cid)
                 store["response"]   = final + "|||HANDOFF|||"
                 store["time"]       = t
@@ -2017,7 +2017,7 @@ async def chat_response(request: Request):
         _skip_faq = any(s in q_lower for s in _SUPPORT)
         faq_answer = None if _skip_faq else lookup_faq(query, _chat_cid)
         if faq_answer:
-            final  = apply_teddy_vibes(faq_answer)
+            final  = faq_answer
             t      = get_teddy_time()
             save_history_row(session_id, query, final, _chat_cid)
             store["response"]   = final
@@ -2047,7 +2047,7 @@ async def chat_response(request: Request):
                 direct = direct_price_answer(query, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
-                    final = apply_teddy_vibes(direct)
+                    final = direct
                     t = get_teddy_time()
                     save_history_row(session_id, query, final, _chat_cid)
                     store["response"]   = final
@@ -2101,7 +2101,7 @@ async def chat_response(request: Request):
         if _needs_handoff:
             full_response = full_response.replace("[[NEEDS_HANDOFF]]", "").strip()
 
-        final = apply_teddy_vibes(full_response)
+        final = full_response
         t     = get_teddy_time()
 
         save_history_row(session_id, query, final, _chat_cid)
@@ -4085,7 +4085,7 @@ async def widget_chat(request: Request):
             for p in picks:
                 stk = "in stock" if p.get("in_stock") else "out of stock"
                 lines.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({stk})")
-            full = "Here's what we have: " + " • ".join(lines) + ". Which one would you like?"
+            full = "Yes, we've got a few! " + " • ".join(lines) + ". Which one would you like?"
 
         # Deterministic handoff signal: the AI appends a fixed [[NEEDS_HANDOFF]]
         # marker whenever it genuinely doesn't know something — never guessed
