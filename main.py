@@ -2029,14 +2029,20 @@ async def chat_response(request: Request):
         # Load history up front so product matching can use conversation context
         history_for_context = load_history(session_id, _chat_cid)
 
-        # ── 2. Product/price questions → deterministic DB answer (no AI) ───
-        is_stock_query = any(kw in q_lower for kw in STOCK_KEYWORDS)
-        is_product_q = (
-            any(kw in q_lower for kw in PRODUCT_KEYWORDS)
-            or any(kw in q_lower for kw in ["rainbow","giant","mini","snuggle","gentle","large","soft"])
-            or is_stock_query
-        )
-        if is_product_q:
+        # ── 2. Ground the AI in real product data by default for any ─────
+        # substantive message — same approach as the widget. A hardcoded
+        # keyword list can never anticipate every business's vocabulary
+        # ("cozy" for plushies, "beautiful" for flowers, etc.), so instead we
+        # only skip grounding for the few cases where it's clearly not
+        # needed: greetings and non-substantive filler.
+        _GREETINGS_MAIN = {"hi","hii","hey","heyy","hello","helo","yo","hiya","howzit",
+                      "morning","good morning","good afternoon","good evening","sup",
+                      "hi there","hello there","heita","thanks","thank you","ok","okay","cool",
+                      "bye","goodbye","see you","later","yes","no","sure","great","nice"}
+        _is_greeting_main = q_lower.strip().rstrip("!.?") in _GREETINGS_MAIN
+        _is_substantive_main = (not _is_greeting_main) and len(q_lower.strip()) >= 3
+        all_prods = []
+        if _is_substantive_main:
             try:
                 sb_p = _get_supabase()
                 all_prods = sb_p.table("products").select(
@@ -2092,6 +2098,19 @@ async def chat_response(request: Request):
 
         full_response = "".join(get_engine(_chat_cid).stream_answer(enhanced_query, chat_history=history_for_context))
         full_response = _strip_urls(full_response)
+
+        # Hallucination guard (same backstop as the widget): if the AI
+        # invented product names despite being given real data, replace the
+        # entire response with the real catalog instead of letting a
+        # fabricated answer with fake prices reach the customer.
+        if all_prods and detect_fake_products(full_response, all_prods):
+            _smart_h = smart_match_products(query, all_prods)
+            _picks_h = [m[0] for m in _smart_h][:5] if _smart_h else all_prods[:5]
+            _lines_h = []
+            for p in _picks_h:
+                _stk_h = "in stock" if p.get("in_stock") else "out of stock"
+                _lines_h.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({_stk_h})")
+            full_response = "Here's what we actually have: " + " • ".join(_lines_h) + ". Which one would you like?"
 
         # Deterministic handoff signal (same mechanism as the widget): the AI
         # appends a fixed [[NEEDS_HANDOFF]] marker whenever it genuinely
