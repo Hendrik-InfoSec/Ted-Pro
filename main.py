@@ -4015,18 +4015,22 @@ async def widget_chat(request: Request):
             logger.error(f"Product fetch error: {_fe}")
             all_prods = []
 
-        # Does this message reference any real product? (keyword OR name/category match)
-        PROD_TRIGGERS = list(PRODUCT_KEYWORDS) + ["rainbow", "giant", "mini", "snuggle", "gentle", "large", "soft"]
-        keyword_hit = any(kw in q_lower for kw in PROD_TRIGGERS) or any(kw in q_lower for kw in STOCK_KEYWORDS)
-        # Greetings and very short messages must never trigger product matching.
+        # Ground the AI in real product data by default for any substantive
+        # message — works identically for every client regardless of what
+        # words their customers actually use ("cozy" for plushies, "beautiful"
+        # for flowers, "durable" for hardware, etc.). A hardcoded adjective
+        # list can never keep up with every business's vocabulary, so instead
+        # we only SKIP attaching real data for the few cases where it's
+        # clearly not needed: greetings, and very short/non-substantive
+        # messages. Everything else gets grounded, by default.
         _GREETINGS = {"hi","hii","hey","heyy","hello","helo","yo","hiya","howzit",
                       "morning","good morning","good afternoon","good evening","sup",
-                      "hi there","hello there","heita","thanks","thank you","ok","okay","cool"}
+                      "hi there","hello there","heita","thanks","thank you","ok","okay","cool",
+                      "bye","goodbye","see you","later","yes","no","sure","great","nice"}
         _is_greeting = q_lower.strip().rstrip("!.?") in _GREETINGS
-        name_hit = (not _is_greeting and len(q_lower.strip()) >= 3
-                    and bool(smart_match_products(prompt, all_prods))) if all_prods else False
+        _is_substantive = (not _is_greeting) and len(q_lower.strip()) >= 3
 
-        if all_prods and (keyword_hit or name_hit):
+        if all_prods and _is_substantive:
             try:
                 # Try direct price answer first — bypasses AI, no hallucination
                 direct = direct_price_answer(prompt, all_prods)
