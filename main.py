@@ -634,6 +634,41 @@ def direct_attribute_answer(query: str, all_products: list) -> str | None:
     return f"The {name} is made from {material}. Would you like to add it to your cart?"
 
 
+def resolve_pronoun_reference(query: str, chat_history: list, all_products: list) -> str:
+    """
+    "Do you have it in stock?" only means something if we know what "it" is.
+    Before giving up and treating a pronoun-only follow-up as a generic
+    "no match, show everything" browse question, check recent conversation
+    history for the most recently discussed real product and substitute its
+    actual name in. Without this, any short follow-up ("is it in stock?",
+    "what about that one?") gets treated as if the customer named nothing at
+    all, and the deterministic browse fallback dumps the whole catalog
+    instead of answering about the specific item they clearly meant.
+    """
+    ql = query.lower().strip()
+    has_pronoun = any(p in f" {ql} " for p in [" it ", " it?", "it?", " that ", "that one", "this one", " this "])
+    if not has_pronoun or not chat_history:
+        return query
+
+    # If the query already confidently names a product on its own, leave it alone
+    current = smart_match_products(query, all_products)
+    if current and current[0][1] >= 0.5:
+        return query
+
+    # Scan backward through recent history for the last clearly-mentioned product
+    for msg in reversed(chat_history[-10:]):
+        text = msg.get("content", "")
+        if not text:
+            continue
+        hist_matches = smart_match_products(text, all_products)
+        if hist_matches and hist_matches[0][1] >= 0.6:
+            product_name = hist_matches[0][0].get("name", "")
+            if product_name:
+                return query + " " + product_name
+
+    return query
+
+
 def direct_price_answer(query: str, all_products: list) -> str | None:
     """
     For price/stock questions specifically, return an exact answer from the
@@ -2121,8 +2156,11 @@ async def chat_response(request: Request):
                     "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
                 ).eq("client_id", _chat_cid).execute().data or []
 
+                # Resolve pronoun follow-ups ("is it in stock?") to the actual
+                # product being discussed before attempting a direct answer.
+                _resolved_query = resolve_pronoun_reference(query, history_for_context, all_prods)
                 # Direct DB answer first — bypasses AI entirely, zero hallucination
-                direct = direct_price_answer(query, all_prods) or direct_attribute_answer(query, all_prods) or direct_browse_answer(query, all_prods)
+                direct = direct_price_answer(_resolved_query, all_prods) or direct_attribute_answer(_resolved_query, all_prods) or direct_browse_answer(_resolved_query, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
                     final = direct
@@ -4138,8 +4176,11 @@ async def widget_chat(request: Request):
 
         if all_prods and _is_substantive:
             try:
+                # Resolve pronoun follow-ups ("is it in stock?") to the actual
+                # product being discussed before attempting a direct answer.
+                _resolved_prompt = resolve_pronoun_reference(prompt, history, all_prods)
                 # Try direct price/material answer first — bypasses AI, no hallucination
-                direct = direct_price_answer(prompt, all_prods) or direct_attribute_answer(prompt, all_prods) or direct_browse_answer(prompt, all_prods)
+                direct = direct_price_answer(_resolved_prompt, all_prods) or direct_attribute_answer(_resolved_prompt, all_prods) or direct_browse_answer(_resolved_prompt, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
                     save_history_row(sid, prompt, direct, cid)
