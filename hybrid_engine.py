@@ -328,7 +328,13 @@ class HybridEngine:
             "messages": messages,
             "stream": stream,
             "temperature": 0.7,
-            "max_tokens": 500
+            "max_tokens": 500,
+            # Explicitly disable reasoning/thinking mode. Some models
+            # (especially smaller free-tier ones) narrate their internal
+            # step-by-step deliberation as plain visible text instead of
+            # keeping it in a separate field \u2014 without this, that
+            # "thinking out loud" leaks straight into what the customer sees.
+            "reasoning": {"enabled": False}
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
