@@ -347,6 +347,7 @@ class HybridEngine:
                     raise ValueError(f"API error {response.status_code}: {response.text}")
 
                 if stream:
+                    _model_logged = False
                     for line in response.iter_lines():
                         if line:
                             decoded = line.decode("utf-8")
@@ -356,13 +357,22 @@ class HybridEngine:
                                     break
                                 try:
                                     json_data = json.loads(data)
+                                    if not _model_logged:
+                                        _actual_model = json_data.get("model", "")
+                                        if _actual_model:
+                                            self.logger.info(f"Answered by model: {_actual_model}")
+                                            _model_logged = True
                                     content = json_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
                                     if content:
                                         yield content
                                 except json.JSONDecodeError:
                                     continue
                 else:
-                    yield response.json()["choices"][0]["message"]["content"]
+                    _resp_json = response.json()
+                    _actual_model = _resp_json.get("model", "")
+                    if _actual_model:
+                        self.logger.info(f"Answered by model: {_actual_model}")
+                    yield _resp_json["choices"][0]["message"]["content"]
                 break
 
             except Exception as e:
