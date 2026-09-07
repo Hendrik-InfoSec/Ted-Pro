@@ -2112,7 +2112,14 @@ async def chat_response(request: Request):
         _response_store.pop(session_id, None)
         return HTMLResponse(content=bot_bubble(resp, t))
     if store.get("processing"):
-        return HTMLResponse(content="")
+        # CRITICAL: never return truly empty content here. The polling
+        # element's own hx-target is "#thinking" — if we return nothing,
+        # that swap removes #thinking from the page entirely, and every
+        # future poll has no valid target to replace. The conversation then
+        # hangs forever with a blank response, even once real processing
+        # finishes and has a perfectly good answer ready. Re-rendering the
+        # thinking indicator keeps #thinking alive so polling can continue.
+        return HTMLResponse(content=thinking_bubble())
 
     store["processing"] = True
     query = store.get("query", "")
