@@ -2097,6 +2097,14 @@ async def chat_response(request: Request):
         history_for_context.append({"role": "user", "content": cleaned_query})
 
         full_response = "".join(get_engine(_chat_cid).stream_answer(enhanced_query, chat_history=history_for_context))
+
+        # Same monitoring backstop as the widget — log loudly if a model
+        # leaks its internal reasoning as plain text, rather than that
+        # reaching a customer unnoticed.
+        _leak_markers_main = ("the user is asking", "looking at the message", "according to the instructions",
+                          "i need to", "let me craft", "re-reading the instructions")
+        if len(full_response) > 500 and sum(m in full_response.lower() for m in _leak_markers_main) >= 2:
+            logger.warning(f"Possible reasoning leak in main app response for {_chat_cid}: {full_response[:200]}...")
         full_response = _strip_urls(full_response)
 
         # Hallucination guard (same backstop as the widget): if the AI
@@ -4097,6 +4105,17 @@ async def widget_chat(request: Request):
         enhanced = sanitize_enhanced_query(enhanced, cleaned_prompt)
         history.append({"role": "user", "content": cleaned_prompt})
         full = "".join(get_engine(cid).stream_answer(enhanced, chat_history=history))
+
+        # Monitoring backstop: some models narrate internal reasoning as plain
+        # text instead of keeping it separate, even with reasoning disabled in
+        # the request. This doesn't try to surgically fix the text (too risky
+        # to mangle a legitimate response) — it just logs loudly so a leaked
+        # response is visible in Render logs rather than silently reaching a
+        # customer unnoticed.
+        _leak_markers = ("the user is asking", "looking at the message", "according to the instructions",
+                          "i need to", "let me craft", "re-reading the instructions")
+        if len(full) > 500 and sum(m in full.lower() for m in _leak_markers) >= 2:
+            logger.warning(f"Possible reasoning leak in widget response for {cid}: {full[:200]}...")
         full = _strip_urls(full)
 
         # Hallucination guard: if AI invented product names, replace with real list
