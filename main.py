@@ -640,14 +640,42 @@ def resolve_pronoun_reference(query: str, chat_history: list, all_products: list
     Before giving up and treating a pronoun-only follow-up as a generic
     "no match, show everything" browse question, check recent conversation
     history for the most recently discussed real product and substitute its
-    actual name in. Without this, any short follow-up ("is it in stock?",
-    "what about that one?") gets treated as if the customer named nothing at
-    all, and the deterministic browse fallback dumps the whole catalog
-    instead of answering about the specific item they clearly meant.
+    actual name in.
+
+    Deliberately conservative: only fires when the pronoun IS the subject of
+    the question, not merely present anywhere in it. "is THIS all you have"
+    uses "this" to mean "your whole catalog", not "this specific product" —
+    a broad substring match on "this"/"it" wrongly caught that case and
+    answered about a random earlier product instead. To avoid that, the
+    query must reduce to essentially nothing but a bare pronoun once common
+    question filler is stripped out before we treat it as a reference.
     """
-    ql = query.lower().strip()
-    has_pronoun = any(p in f" {ql} " for p in [" it ", " it?", "it?", " that ", "that one", "this one", " this "])
-    if not has_pronoun or not chat_history:
+    ql = query.lower().strip().rstrip("?!.")
+    if not chat_history:
+        return query
+
+    # Strip common filler phrases to see what's actually LEFT of the question
+    _filler = [
+        "do you have", "have you got", "is it", "are they", "whats", "what's",
+        "how much is", "how much", "in stock", "available", "and", "what about",
+        "just", "only", "still",
+    ]
+    stripped = ql
+    for f in _filler:
+        stripped = stripped.replace(f, " ")
+    stripped = " ".join(stripped.split())  # collapse whitespace
+
+    # After stripping, the query must be ESSENTIALLY just a bare pronoun —
+    # nothing substantial left over. "is this all you have" strips down to
+    # "this all you have" (nothing removed for "all you have"), which is
+    # NOT a bare pronoun, so it correctly won't match.
+    BARE_PRONOUNS = {"it", "that", "this", "that one", "this one", "them", ""}
+    if stripped not in BARE_PRONOUNS:
+        return query
+    # An empty result after stripping filler only counts if the original
+    # query actually contained a pronoun word — otherwise "in stock?" alone
+    # (no pronoun at all) would also incorrectly qualify.
+    if stripped == "" and not any(p in f" {ql} " for p in [" it ", " it?", "it?", " that ", " this ", " them "]):
         return query
 
     # If the query already confidently names a product on its own, leave it alone
