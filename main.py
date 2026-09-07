@@ -570,6 +570,40 @@ def _fmt_price(p: dict) -> str:
     return f"{cur} {val:.2f}"
 
 
+def direct_attribute_answer(query: str, all_products: list) -> str | None:
+    """
+    For questions about a product's material, size, or color — return the
+    exact real value straight from the database, no AI involved. This closes
+    a real hallucination gap: the AI was confidently stating WRONG material
+    values even when given the correct one in PRODUCT INFO (e.g. inventing
+    "100% polyester" when the real value was "Satin-finish Plush"), and the
+    existing hallucination guard only catches invented PRODUCT NAMES, never
+    verifies whether a claimed ATTRIBUTE about a real product is accurate.
+    Same reliability pattern as direct_price_answer: bypass the AI entirely
+    for the specific, well-defined question types where we can guarantee a
+    correct answer from real data.
+    """
+    ql = query.lower()
+    ATTRIBUTE_TRIGGERS = [
+        "made of", "made from", "material", "fabric",
+        "what is it made", "what's it made", "whats it made",
+    ]
+    if not any(kw in ql for kw in ATTRIBUTE_TRIGGERS):
+        return None
+
+    matches = smart_match_products(query, all_products)
+    if not matches or matches[0][1] < 0.6:
+        return None  # not confident enough — let the AI handle it normally
+
+    product = matches[0][0]
+    material = (product.get("material") or "").strip()
+    if not material:
+        return None  # genuinely blank — let the honest "don't know" path handle it
+
+    name = product.get("name", "this item")
+    return f"The {name} is made from {material}. Would you like to add it to your cart?"
+
+
 def direct_price_answer(query: str, all_products: list) -> str | None:
     """
     For price/stock questions specifically, return an exact answer from the
@@ -2050,7 +2084,7 @@ async def chat_response(request: Request):
                 ).eq("client_id", _chat_cid).execute().data or []
 
                 # Direct DB answer first — bypasses AI entirely, zero hallucination
-                direct = direct_price_answer(query, all_prods)
+                direct = direct_price_answer(query, all_prods) or direct_attribute_answer(query, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
                     final = direct
@@ -4059,8 +4093,8 @@ async def widget_chat(request: Request):
 
         if all_prods and _is_substantive:
             try:
-                # Try direct price answer first — bypasses AI, no hallucination
-                direct = direct_price_answer(prompt, all_prods)
+                # Try direct price/material answer first — bypasses AI, no hallucination
+                direct = direct_price_answer(prompt, all_prods) or direct_attribute_answer(prompt, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
                     save_history_row(sid, prompt, direct, cid)
