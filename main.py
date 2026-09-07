@@ -993,8 +993,16 @@ def bot_bubble(text: str, t: str) -> str:
         f'</script>'
     )
 
-def handoff_bubble() -> str:
-    """A WhatsApp CTA bubble injected when human handoff is needed."""
+def handoff_bubble(customer_query: str = "") -> str:
+    """A WhatsApp CTA bubble injected when human handoff is needed. Carries
+    the customer's actual question into the WhatsApp message when available,
+    so they don't have to repeat themselves to the human — the single most
+    commonly cited failure in chatbot handoff research."""
+    import urllib.parse as _urlp3
+    wa_link = "https://wa.me/27836205614"
+    if customer_query:
+        ctx = f"Hi CuddleHeros, I was asking: \"{customer_query[:150]}\" and need some help. \U0001f9f8"
+        wa_link = f"{wa_link}?text={_urlp3.quote(ctx)}"
     return (
         '<div class="flex justify-start fade-in mb-3">'
         '<div class="flex items-end gap-2 max-w-[85%] md:max-w-[70%]">'
@@ -1002,7 +1010,7 @@ def handoff_bubble() -> str:
         '<div class="bg-white border border-[#FFE4CC] px-4 py-3 rounded-2xl rounded-bl-md shadow-md">'
         '<p class="text-sm text-[#2D1B00] mb-3">For this one I\'d love to connect you directly with our team '
         '\U0001f917 They can sort you out properly!</p>'
-        '<a href="https://wa.me/27836205614" target="_blank" '
+        f'<a href="{wa_link}" target="_blank" '
         'class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm text-white shadow-md" '
         'style="background:#25D366">'
         '&#128172; Chat with us on WhatsApp</a>'
@@ -2039,7 +2047,7 @@ async def chat_response(request: Request):
                 store["time"]       = t
                 store["ready"]      = True
                 store["processing"] = False
-                return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble())
+                return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble(query))
 
         # ── 1. FAQ lookup — skip if complaint/context-dependent ───────────
         _SUPPORT = [
@@ -2173,7 +2181,7 @@ async def chat_response(request: Request):
         store["processing"] = False
 
         if _needs_handoff:
-            return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble())
+            return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble(query))
 
         return HTMLResponse(content=bot_bubble(final, t))
 
@@ -4029,7 +4037,14 @@ async def widget_chat(request: Request):
                 _b = tenancy.account_branding(_get_supabase(), cid)
                 _wa = (_b.get("whatsapp_number") or "").strip()
                 if _wa:
-                    resp["whatsapp"] = f"https://wa.me/{_wa}"
+                    # Carry real context into the handoff — the #1 documented
+                    # complaint about chatbot handoffs is customers having to
+                    # repeat themselves to the human. Pre-fill what they were
+                    # actually asking about.
+                    import urllib.parse as _urlp
+                    _biz_wa = (_b.get("business_name") or "our team").strip()
+                    _ctx_msg = f"Hi {_biz_wa}, I was asking: \"{prompt[:150]}\" and need some help."
+                    resp["whatsapp"] = f"https://wa.me/{_wa}?text={_urlp.quote(_ctx_msg)}"
             except Exception:
                 pass
             return JSONResponse(resp)
@@ -4183,7 +4198,10 @@ async def widget_chat(request: Request):
                 _wa2 = (_b2.get("whatsapp_number") or "").strip()
                 if _wa2:
                     resp["handoff"] = True
-                    resp["whatsapp"] = f"https://wa.me/{_wa2}"
+                    import urllib.parse as _urlp2
+                    _biz_wa2 = (_b2.get("business_name") or "our team").strip()
+                    _ctx_msg2 = f"Hi {_biz_wa2}, I was asking: \"{prompt[:150]}\" and need some help."
+                    resp["whatsapp"] = f"https://wa.me/{_wa2}?text={_urlp2.quote(_ctx_msg2)}"
             except Exception:
                 pass
 
