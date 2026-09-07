@@ -2109,7 +2109,7 @@ async def chat_response(request: Request):
                         )
                     enhanced_query = (
                         query
-                        + "\n\n[PRODUCT INFO — use ONLY these exact prices, do not invent details]\n"
+                        + "\n\n[PRODUCT INFO — this is the COMPLETE list of what is actually available. Only mention items, types or categories that appear below. NEVER suggest a category (like blankets, pillows, clothing) that is not in this list, even as a question.]\n"
                         + "\n".join(lines)
                         + "\n[END PRODUCT INFO]"
                     )
@@ -4119,7 +4119,7 @@ async def widget_chat(request: Request):
                         )
                     enhanced = (
                         prompt
-                        + "\n\n[PRODUCT INFO — use ONLY these exact prices and details, do not invent anything]\n"
+                        + "\n\n[PRODUCT INFO — this is the COMPLETE list of what is actually available. Only mention items, types or categories that appear below. NEVER suggest a category (like blankets, pillows, clothing) that is not in this list, even as a question.]\n"
                         + "\n".join(lines)
                         + "\n[END PRODUCT INFO]"
                     )
