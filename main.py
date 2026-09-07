@@ -570,6 +570,36 @@ def _fmt_price(p: dict) -> str:
     return f"{cur} {val:.2f}"
 
 
+def direct_browse_answer(query: str, all_products: list) -> str | None:
+    """
+    For vague/exploratory questions with NO confident product match ("do you
+    have anything cozy?", "show me something nice") - build the response
+    directly from the real catalog, in code, instead of handing the AI an
+    open-ended "here's the catalog, say something helpful" task. That open
+    task is exactly where the AI kept inventing categories that don't exist
+    (blankets, pillows, loungewear for a plushie store) even when given the
+    real data, because summarizing/browsing is a much looser task than
+    stating one exact fact. This removes that gap entirely: if there's no
+    confident match, code builds the answer, never the AI.
+    """
+    if not all_products:
+        return None
+
+    matches = smart_match_products(query, all_products)
+    if matches and matches[0][1] >= 0.5:
+        return None
+
+    picks = all_products[:5]
+    lines = []
+    for p in picks:
+        nm = p.get("name")
+        pr = float(p.get("price") or 0)
+        stock = "in stock" if p.get("in_stock") else "out of stock"
+        lines.append(nm + " - ZAR " + format(pr, ".2f") + " (" + stock + ")")
+    listing = " . ".join(lines)
+    return "Here is what we actually have: " + listing + ". Would any of these work for you?"
+
+
 def direct_attribute_answer(query: str, all_products: list) -> str | None:
     """
     For questions about a product's material, size, or color — return the
@@ -2092,7 +2122,7 @@ async def chat_response(request: Request):
                 ).eq("client_id", _chat_cid).execute().data or []
 
                 # Direct DB answer first — bypasses AI entirely, zero hallucination
-                direct = direct_price_answer(query, all_prods) or direct_attribute_answer(query, all_prods)
+                direct = direct_price_answer(query, all_prods) or direct_attribute_answer(query, all_prods) or direct_browse_answer(query, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
                     final = direct
@@ -4109,7 +4139,7 @@ async def widget_chat(request: Request):
         if all_prods and _is_substantive:
             try:
                 # Try direct price/material answer first — bypasses AI, no hallucination
-                direct = direct_price_answer(prompt, all_prods) or direct_attribute_answer(prompt, all_prods)
+                direct = direct_price_answer(prompt, all_prods) or direct_attribute_answer(prompt, all_prods) or direct_browse_answer(prompt, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
                     save_history_row(sid, prompt, direct, cid)
