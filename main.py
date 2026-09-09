@@ -581,6 +581,13 @@ def direct_browse_answer(query: str, all_products: list) -> str | None:
     real data, because summarizing/browsing is a much looser task than
     stating one exact fact. This removes that gap entirely: if there's no
     confident match, code builds the answer, never the AI.
+
+    Shows only the first 5 products normally (keeps replies short), UNLESS
+    the customer is explicitly asking for the complete list ("is that all",
+    "everything you have", "the whole catalog") - repeatedly capping at 5
+    while being asked directly "is this ALL you have" reads as evasive, even
+    though nothing was invented. When the full list is clearly wanted, show
+    every product, honestly, instead of quietly capping every single time.
     """
     if not all_products:
         return None
@@ -589,7 +596,18 @@ def direct_browse_answer(query: str, all_products: list) -> str | None:
     if matches and matches[0][1] >= 0.5:
         return None
 
-    picks = all_products[:5]
+    ql = query.lower()
+    WANTS_FULL_LIST = [
+        "is that all", "is this all", "everything you have", "everything yall",
+        "everything you guys", "whole catalog", "whole list", "entire catalog",
+        "entire list", "full list", "full catalog", "the whole items",
+        "list your catalog", "list everything", "see everything",
+        "thats not everything", "that's not everything", "not everything",
+        "anything else", "what else",
+    ]
+    wants_everything = any(kw in ql for kw in WANTS_FULL_LIST)
+
+    picks = all_products if wants_everything else all_products[:5]
     lines = []
     for p in picks:
         nm = p.get("name")
@@ -597,7 +615,14 @@ def direct_browse_answer(query: str, all_products: list) -> str | None:
         stock = "in stock" if p.get("in_stock") else "out of stock"
         lines.append(nm + " - ZAR " + format(pr, ".2f") + " (" + stock + ")")
     listing = " . ".join(lines)
-    return "Here is what we actually have: " + listing + ". Would any of these work for you?"
+
+    if wants_everything:
+        return "Here is our full range: " + listing + ". Which one would you like?"
+
+    intro = "Here is what we actually have"
+    if len(all_products) > 5:
+        intro += " (a few of our favourites, out of " + str(len(all_products)) + " total)"
+    return intro + ": " + listing + ". Would any of these work for you, or want to see the full list?"
 
 
 def direct_attribute_answer(query: str, all_products: list) -> str | None:
