@@ -2282,13 +2282,27 @@ async def chat_response(request: Request):
         # entire response with the real catalog instead of letting a
         # fabricated answer with fake prices reach the customer.
         if all_prods and detect_fake_products(full_response, all_prods):
+            _ql_h = query.lower()
+            _wants_all_h = any(kw in _ql_h for kw in [
+                "is that all", "is this all", "everything you have", "everything yall",
+                "whole catalog", "whole list", "entire catalog", "entire list",
+                "full list", "full catalog", "list your catalog", "list everything",
+                "see everything", "not everything", "anything else", "what else",
+            ])
             _smart_h = smart_match_products(query, all_prods)
-            _picks_h = [m[0] for m in _smart_h][:5] if _smart_h else all_prods[:5]
+            if _wants_all_h:
+                _picks_h = all_prods
+            else:
+                _picks_h = [m[0] for m in _smart_h][:5] if _smart_h else all_prods[:5]
             _lines_h = []
             for p in _picks_h:
                 _stk_h = "in stock" if p.get("in_stock") else "out of stock"
                 _lines_h.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({_stk_h})")
-            full_response = "Here's what we actually have: " + " • ".join(_lines_h) + ". Which one would you like?"
+            _joined_h = " • ".join(_lines_h)
+            if _wants_all_h:
+                full_response = "Here's our full range: " + _joined_h + ". Which one would you like?"
+            else:
+                full_response = "Here's what we actually have: " + _joined_h + ". Which one would you like?"
 
         # Deterministic handoff signal (same mechanism as the widget): the AI
         # appends a fixed [[NEEDS_HANDOFF]] marker whenever it genuinely
@@ -4300,13 +4314,27 @@ async def widget_chat(request: Request):
 
         # Hallucination guard: if AI invented product names, replace with real list
         if all_prods and detect_fake_products(full, all_prods):
+            _ql_w = prompt.lower()
+            _wants_all_w = any(kw in _ql_w for kw in [
+                "is that all", "is this all", "everything you have", "everything yall",
+                "whole catalog", "whole list", "entire catalog", "entire list",
+                "full list", "full catalog", "list your catalog", "list everything",
+                "see everything", "not everything", "anything else", "what else",
+            ])
             smart = smart_match_products(prompt, all_prods)
-            picks = [m[0] for m in smart][:5] if smart else all_prods[:5]
+            if _wants_all_w:
+                picks = all_prods
+            else:
+                picks = [m[0] for m in smart][:5] if smart else all_prods[:5]
             lines = []
             for p in picks:
                 stk = "in stock" if p.get("in_stock") else "out of stock"
                 lines.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({stk})")
-            full = "Yes, we've got a few! " + " • ".join(lines) + ". Which one would you like?"
+            _joined_w = " • ".join(lines)
+            if _wants_all_w:
+                full = "Here's our full range: " + _joined_w + ". Which one would you like?"
+            else:
+                full = "Yes, we've got a few! " + _joined_w + ". Which one would you like?"
 
         # Deterministic handoff signal: the AI appends a fixed [[NEEDS_HANDOFF]]
         # marker whenever it genuinely doesn't know something — never guessed
