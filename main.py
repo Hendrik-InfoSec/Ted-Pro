@@ -597,6 +597,22 @@ def direct_browse_answer(query: str, all_products: list) -> str | None:
         return None
 
     ql = query.lower()
+
+    # Only fire for messages that actually sound like browsing/catalog
+    # interest. Without this check, ANY unmatched message ("I love it",
+    # "whats happening now?", a stray typo) fell through here and got the
+    # exact same product listing shoved back at it, completely ignoring
+    # what the customer actually said - conversational replies deserve a
+    # conversational response, not a repeated catalog dump.
+    BROWSE_INTENT = [
+        "have", "got", "sell", "stock", "show me", "see", "looking for",
+        "want", "need", "anything", "something", "options", "catalog",
+        "list", "range", "selection", "what do you", "what else",
+        "everything", "all you", "full list", "whole",
+    ]
+    if not any(kw in ql for kw in BROWSE_INTENT):
+        return None
+
     WANTS_FULL_LIST = [
         "is that all", "is this all", "everything you have", "everything yall",
         "everything you guys", "whole catalog", "whole list", "entire catalog",
