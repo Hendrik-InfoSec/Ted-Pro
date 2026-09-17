@@ -2236,7 +2236,7 @@ async def chat_response(request: Request):
                 # product being discussed before attempting a direct answer.
                 _resolved_query = resolve_pronoun_reference(query, history_for_context, all_prods)
                 # Direct DB answer first — bypasses AI entirely, zero hallucination
-                direct = direct_price_answer(_resolved_query, all_prods) or direct_attribute_answer(_resolved_query, all_prods) or direct_browse_answer(_resolved_query, all_prods)
+                direct = direct_price_answer(_resolved_query, all_prods) or direct_attribute_answer(_resolved_query, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
                     final = direct
@@ -2253,7 +2253,7 @@ async def chat_response(request: Request):
                 matched = [m[0] for m in smart] if smart else all_prods
                 if matched:
                     lines = []
-                    for p in matched[:5]:
+                    for p in matched[:30]:
                         stk = "In stock" if p.get("in_stock") else "Out of stock"
                         lines.append(
                             f"{p['name']} | ZAR {float(p.get('price') or 0):.2f} | {stk} | "
@@ -4270,7 +4270,7 @@ async def widget_chat(request: Request):
                 # product being discussed before attempting a direct answer.
                 _resolved_prompt = resolve_pronoun_reference(prompt, history, all_prods)
                 # Try direct price/material answer first — bypasses AI, no hallucination
-                direct = direct_price_answer(_resolved_prompt, all_prods) or direct_attribute_answer(_resolved_prompt, all_prods) or direct_browse_answer(_resolved_prompt, all_prods)
+                direct = direct_price_answer(_resolved_prompt, all_prods) or direct_attribute_answer(_resolved_prompt, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
                     save_history_row(sid, prompt, direct, cid)
@@ -4287,7 +4287,7 @@ async def widget_chat(request: Request):
 
                 if matched:
                     lines = []
-                    for p in matched[:5]:
+                    for p in matched[:30]:
                         stock_status = "In stock" if p.get("in_stock") else "Out of stock"
                         lines.append(
                             f"{p['name']} | ZAR {float(p.get('price') or 0):.2f} | {stock_status} | "
