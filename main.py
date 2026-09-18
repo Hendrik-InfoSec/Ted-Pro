@@ -808,6 +808,155 @@ def direct_price_answer(query: str, all_products: list) -> str | None:
     return _single(matches[0][0])
 
 
+def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) -> dict:
+    """
+    Shared response pipeline used by BOTH the widget and the main app —
+    built once, used by both, specifically so a fix here never needs to be
+    applied twice in two places (today's most repeated mistake before this
+    existed). Runs, in order: bulk-quantity handoff check, deterministic
+    price/material lookup, then the structured-output AI call where the
+    model can only select real product IDs, never type a fact into free
+    text.
+
+    Returns a dict always containing "response". May also contain "handoff"
+    and "whatsapp". If "ai_failed" is True, the structured AI path was
+    attempted but did not return usable data (model routing issue, schema
+    not honored, API error) — the caller should ignore "response" here and
+    fall back to its own existing free-text system instead.
+    """
+    q_lower = prompt.lower()
+
+    # Bulk-quantity requests ("60 of them") are a business conversation, not
+    # something Ted can confirm from a simple in_stock flag — straight to a
+    # human, before any AI involvement at all.
+    _has_purchase_intent = any(kw in q_lower for kw in [
+        "get", "want", "buy", "order", "need", "of them", "of it",
+        "units", "pieces", "can i have", "can i get",
+    ])
+    import re as _re_qty
+    _qty_match = _re_qty.search(r"\b(\d{2,})\b", prompt)
+    if _has_purchase_intent and _qty_match and int(_qty_match.group(1)) >= 15:
+        result = {
+            "response": (
+                f"For an order of {_qty_match.group(1)}, I'd like our team to "
+                "confirm availability and pricing directly with you rather than guess. \U0001f9f8"
+            ),
+            "ai_failed": False,
+        }
+        try:
+            _b_bulk = tenancy.account_branding(_get_supabase(), cid)
+            _wa_bulk = (_b_bulk.get("whatsapp_number") or "").strip()
+            if _wa_bulk:
+                import urllib.parse as _urlp_bulk
+                _biz_bulk = (_b_bulk.get("business_name") or "our team").strip()
+                _ctx_bulk = f"Hi {_biz_bulk}, I was asking: \"{prompt[:150]}\" and need some help."
+                result["handoff"] = True
+                result["whatsapp"] = f"https://wa.me/{_wa_bulk}?text={_urlp_bulk.quote(_ctx_bulk)}"
+        except Exception:
+            pass
+        return result
+
+    # Resolve pronoun follow-ups ("is it in stock?") to the actual product
+    # being discussed, then try a deterministic price/material answer —
+    # bypasses the AI entirely, zero hallucination possible.
+    _resolved_prompt = resolve_pronoun_reference(prompt, history, all_prods)
+    direct = direct_price_answer(_resolved_prompt, all_prods) or direct_attribute_answer(_resolved_prompt, all_prods)
+    if direct:
+        return {"response": _strip_urls(direct), "ai_failed": False}
+
+    # No specific factual question — structured-output path: the AI selects
+    # real product IDs, never types a name/price/category into free text.
+    _structured_result = None
+    logger.info(f"[STRUCTURED] Attempting structured path for: {prompt[:60]!r}")
+    try:
+        _id_lines = []
+        for p in all_prods[:30]:
+            stock_status = "In stock" if p.get("in_stock") else "Out of stock"
+            _id_lines.append(
+                f"id: {p.get('id')} | {p['name']} | ZAR {float(p.get('price') or 0):.2f} | "
+                f"{stock_status} | Size: {p.get('size_cm', '?')}cm | {p.get('material', '')}"
+            )
+        _products_context = "\n".join(_id_lines)
+        _bname = (tenancy.account_branding(_get_supabase(), cid).get("business_name") or "our shop")
+        logger.info(f"[STRUCTURED] Calling get_structured_answer with {len(all_prods)} products")
+        _structured_result = get_engine(cid).get_structured_answer(
+            question=prompt,
+            business_name=_bname,
+            business_type="retail business",
+            business_location="South Africa",
+            products_context=_products_context,
+            chat_history=history,
+        )
+        logger.info(f"[STRUCTURED] Result: {_structured_result!r}")
+    except Exception as _struct_err:
+        logger.error(f"[STRUCTURED] Exception: {type(_struct_err).__name__}: {_struct_err}")
+        _structured_result = None
+
+    if _structured_result is None:
+        return {"ai_failed": True}
+
+    # Validate: every returned ID must actually exist in this client's real
+    # catalog. An invented or wrong-client ID is silently dropped, never
+    # rendered, never trusted.
+    _real_ids = {str(p.get("id")): p for p in all_prods}
+    _verified = [
+        _real_ids[str(pid)] for pid in _structured_result.get("selected_product_ids", [])
+        if str(pid) in _real_ids
+    ]
+    _tone = str(_structured_result.get("reply_tone") or "").strip()
+
+    # A short pure reaction ("thats awesome") is a complete reply on its own —
+    # don't drag facts from earlier context back into it.
+    _ql_reaction = prompt.lower().strip().rstrip("!.?")
+    _is_pure_reaction = len(_ql_reaction.split()) <= 4 and any(
+        w in _ql_reaction for w in [
+            "awesome", "amazing", "great", "nice", "cool", "love",
+            "perfect", "sounds good", "thanks", "thank you", "cheers",
+        ]
+    )
+    if _verified and not _is_pure_reaction:
+        _fact_lines = []
+        for p in _verified:
+            _stk = "in stock" if p.get("in_stock") else "out of stock"
+            _fact_lines.append(f"{p.get('name')} \u2014 ZAR {float(p.get('price') or 0):.2f} ({_stk})")
+        _facts = " \u2022 ".join(_fact_lines)
+        final_structured = (_tone + " " if _tone else "") + _facts
+    else:
+        final_structured = _tone or "How can I help you today?"
+    final_structured = _strip_urls(final_structured)
+
+    result = {"response": final_structured, "ai_failed": False}
+
+    # A reply that already gives a clear, complete "we don't have that"
+    # doesn't need a handoff bolted on too, unless the customer's own
+    # message carries a real urgency signal.
+    _needs_handoff_final = bool(_structured_result.get("needs_handoff"))
+    if _needs_handoff_final:
+        _tone_lower = _tone.lower()
+        _is_complete_denial = any(p in _tone_lower for p in [
+            "don't have", "do not have", "don't carry", "do not carry",
+            "not available", "not in our", "no longer",
+        ])
+        _has_real_urgency = any(kw in q_lower for kw in HANDOFF_KEYWORDS)
+        if _is_complete_denial and not _has_real_urgency:
+            _needs_handoff_final = False
+
+    if _needs_handoff_final:
+        try:
+            _b3 = tenancy.account_branding(_get_supabase(), cid)
+            _wa3 = (_b3.get("whatsapp_number") or "").strip()
+            if _wa3:
+                import urllib.parse as _urlp3
+                _biz3 = (_b3.get("business_name") or "our team").strip()
+                _ctx3 = f"Hi {_biz3}, I was asking: \"{prompt[:150]}\" and need some help."
+                result["handoff"] = True
+                result["whatsapp"] = f"https://wa.me/{_wa3}?text={_urlp3.quote(_ctx3)}"
+        except Exception:
+            pass
+
+    return result
+
+
 def detect_fake_products(ai_response: str, real_products: list) -> bool:
     """
     Returns True if the AI response mentions a product name that does NOT
@@ -2229,13 +2378,27 @@ async def chat_response(request: Request):
             try:
                 sb_p = _get_supabase()
                 all_prods = sb_p.table("products").select(
-                    "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
+                    "id,name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
                 ).eq("client_id", _chat_cid).execute().data or []
 
-                # Resolve pronoun follow-ups ("is it in stock?") to the actual
-                # product being discussed before attempting a direct answer.
+                _shared_result = get_structured_reply(query, all_prods, _chat_cid, history_for_context)
+                if not _shared_result.get("ai_failed"):
+                    final = _shared_result["response"]
+                    t = get_teddy_time()
+                    save_history_row(session_id, query, final, _chat_cid)
+                    store["response"]   = final
+                    store["time"]       = t
+                    store["ready"]      = True
+                    store["processing"] = False
+                    if _shared_result.get("handoff"):
+                        return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble(query))
+                    return HTMLResponse(content=bot_bubble(final, t))
+
+                # Structured output unavailable or failed for this model —
+                # fall back to the existing free-text + hallucination-guard
+                # path below, so the app still works even if a given model
+                # does not honor the schema.
                 _resolved_query = resolve_pronoun_reference(query, history_for_context, all_prods)
-                # Direct DB answer first — bypasses AI entirely, zero hallucination
                 direct = direct_price_answer(_resolved_query, all_prods) or direct_attribute_answer(_resolved_query, all_prods)
                 if direct:
                     direct = _strip_urls(direct)
@@ -2248,21 +2411,20 @@ async def chat_response(request: Request):
                     store["processing"] = False
                     return HTMLResponse(content=bot_bubble(final, t))
 
-                # No clear single answer → give AI the matched products only
                 smart = smart_match_products(query, all_prods)
                 matched = [m[0] for m in smart] if smart else all_prods
                 if matched:
-                    lines = []
+                    lines_pi = []
                     for p in matched[:30]:
                         stk = "In stock" if p.get("in_stock") else "Out of stock"
-                        lines.append(
+                        lines_pi.append(
                             f"{p['name']} | ZAR {float(p.get('price') or 0):.2f} | {stk} | "
                             f"Size: {p.get('size_cm','?')}cm | {p.get('material','')}"
                         )
                     enhanced_query = (
                         query
                         + "\n\n[PRODUCT INFO — this is the COMPLETE list of what is actually available. Only mention items, types or categories that appear below. NEVER suggest a category (like blankets, pillows, clothing) that is not in this list, even as a question.]\n"
-                        + "\n".join(lines)
+                        + "\n".join(lines_pi)
                         + "\n[END PRODUCT INFO]"
                     )
             except Exception as _e:
@@ -4265,178 +4427,40 @@ async def widget_chat(request: Request):
         _is_substantive = (not _is_greeting) and len(q_lower.strip()) >= 3
 
         if all_prods and _is_substantive:
+            _shared_result = get_structured_reply(prompt, all_prods, cid, history)
+            if not _shared_result.get("ai_failed"):
+                final_resp = _shared_result["response"]
+                save_history_row(sid, prompt, final_resp, cid)
+                _resp2 = {"response": final_resp}
+                if show_lead:
+                    _resp2["show_lead"] = True
+                if _shared_result.get("handoff"):
+                    _resp2["handoff"] = True
+                    _resp2["whatsapp"] = _shared_result["whatsapp"]
+                return JSONResponse(_resp2)
+
+            # Structured output unavailable or failed for this model —
+            # fall back to the existing free-text + hallucination-guard
+            # path below, so the app still works even if a given model
+            # does not honor the schema.
             try:
-                # A specific large-quantity request ("60 of them", "get me 40")
-                # is a bulk/wholesale inquiry, not a normal add-to-cart question.
-                # Ted has no real way to confirm bulk availability from a simple
-                # in_stock flag, and letting the AI (deterministic or generative)
-                # answer it risks an implied commitment nobody can actually
-                # honor. Caught here, before any other path, and sent straight
-                # to a human — real number, real conversation, not a guess.
-                import re as _re_qty
-                _ql_qty = prompt.lower()
-                _has_purchase_intent = any(kw in _ql_qty for kw in [
-                    "get", "want", "buy", "order", "need", "of them", "of it",
-                    "units", "pieces", "can i have", "can i get",
-                ])
-                _qty_match = _re_qty.search(r"\b(\d{2,})\b", prompt)
-                if _has_purchase_intent and _qty_match and int(_qty_match.group(1)) >= 15:
-                    _bulk_msg = (
-                        f"For an order of {_qty_match.group(1)}, I'd like our team to "
-                        "confirm availability and pricing directly with you rather than guess. 🧸"
-                    )
-                    save_history_row(sid, prompt, _bulk_msg, cid)
-                    _resp_bulk = {"response": _bulk_msg}
-                    try:
-                        _b_bulk = tenancy.account_branding(_get_supabase(), cid)
-                        _wa_bulk = (_b_bulk.get("whatsapp_number") or "").strip()
-                        if _wa_bulk:
-                            import urllib.parse as _urlp_bulk
-                            _biz_bulk = (_b_bulk.get("business_name") or "our team").strip()
-                            _ctx_bulk = f"Hi {_biz_bulk}, I was asking: \"{prompt[:150]}\" and need some help."
-                            _resp_bulk["handoff"] = True
-                            _resp_bulk["whatsapp"] = f"https://wa.me/{_wa_bulk}?text={_urlp_bulk.quote(_ctx_bulk)}"
-                    except Exception:
-                        pass
-                    return JSONResponse(_resp_bulk)
-
-                # Resolve pronoun follow-ups ("is it in stock?") to the actual
-                # product being discussed before attempting a direct answer.
-                _resolved_prompt = resolve_pronoun_reference(prompt, history, all_prods)
-                # Try direct price/material answer first — bypasses AI, no hallucination
-                direct = direct_price_answer(_resolved_prompt, all_prods) or direct_attribute_answer(_resolved_prompt, all_prods)
-                if direct:
-                    direct = _strip_urls(direct)
-                    save_history_row(sid, prompt, direct, cid)
-                    _resp = {"response": direct}
-                    if show_lead:
-                        _resp["show_lead"] = True
-                    return JSONResponse(_resp)
-
-                # No specific factual question — try the structured-output
-                # path first: the AI can only SELECT real product IDs, never
-                # type a name/price/category into free text. This closes the
-                # entire category-hallucination problem structurally, for
-                # any client's catalog, with zero per-client word lists.
-                _structured_result = None
-                logger.info(f"[STRUCTURED] Attempting structured path for: {prompt[:60]!r}")
-                try:
-                    _id_lines = []
-                    for p in all_prods[:30]:
-                        stock_status = "In stock" if p.get("in_stock") else "Out of stock"
-                        _id_lines.append(
-                            f"id: {p.get('id')} | {p['name']} | ZAR {float(p.get('price') or 0):.2f} | "
-                            f"{stock_status} | Size: {p.get('size_cm', '?')}cm | {p.get('material', '')}"
-                        )
-                    _products_context = "\n".join(_id_lines)
-                    _bname = (tenancy.account_branding(_get_supabase(), cid).get("business_name") or "our shop")
-                    logger.info(f"[STRUCTURED] Calling get_structured_answer with {len(all_prods)} products")
-                    _structured_result = get_engine(cid).get_structured_answer(
-                        question=prompt,
-                        business_name=_bname,
-                        business_type="retail business",
-                        business_location="South Africa",
-                        products_context=_products_context,
-                        chat_history=history,
-                    )
-                    logger.info(f"[STRUCTURED] Result: {_structured_result!r}")
-                except Exception as _struct_err:
-                    logger.error(f"[STRUCTURED] Exception: {type(_struct_err).__name__}: {_struct_err}")
-                    _structured_result = None
-
-                if _structured_result is not None:
-                    # Validate: every returned ID must actually exist in this
-                    # client's real catalog. An ID the AI invented (or one
-                    # belonging to a different client entirely) is silently
-                    # dropped here — not rendered, not trusted.
-                    _real_ids = {str(p.get("id")): p for p in all_prods}
-                    _verified = [
-                        _real_ids[str(pid)] for pid in _structured_result.get("selected_product_ids", [])
-                        if str(pid) in _real_ids
-                    ]
-                    _tone = str(_structured_result.get("reply_tone") or "").strip()
-
-                    # A short pure reaction ("thats awesome", "nice one") is a
-                    # complete reply on its own — don't drag facts from earlier
-                    # in the conversation back into it just because the AI
-                    # carried a product ID over from context. Only suppress
-                    # rendering, never suppress the underlying verification —
-                    # if a later message asks about the product again, it's
-                    # re-verified fresh at that point, same as always.
-                    _ql_reaction = prompt.lower().strip().rstrip("!.?")
-                    _is_pure_reaction = len(_ql_reaction.split()) <= 4 and any(
-                        w in _ql_reaction for w in [
-                            "awesome", "amazing", "great", "nice", "cool", "love",
-                            "perfect", "sounds good", "thanks", "thank you", "cheers",
-                        ]
-                    )
-                    if _verified and not _is_pure_reaction:
-                        _fact_lines = []
-                        for p in _verified:
-                            _stk = "in stock" if p.get("in_stock") else "out of stock"
-                            _fact_lines.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({_stk})")
-                        _facts = " • ".join(_fact_lines)
-                        final_structured = (_tone + " " if _tone else "") + _facts
-                    else:
-                        final_structured = _tone or "How can I help you today?"
-                    final_structured = _strip_urls(final_structured)
-                    save_history_row(sid, prompt, final_structured, cid)
-                    _resp2 = {"response": final_structured}
-                    if show_lead:
-                        _resp2["show_lead"] = True
-
-                    # A reply that already gives a clear, complete "we don't
-                    # have that" doesn't need a handoff bolted on too — that's
-                    # already a full answer, not a dead end. Only suppress
-                    # this when the customer's own message has no real
-                    # urgency signal (HANDOFF_KEYWORDS) — a genuine complaint
-                    # or explicit request for a person still gets connected.
-                    _needs_handoff_final = bool(_structured_result.get("needs_handoff"))
-                    if _needs_handoff_final:
-                        _tone_lower = _tone.lower()
-                        _is_complete_denial = any(p in _tone_lower for p in [
-                            "don't have", "do not have", "don't carry", "do not carry",
-                            "not available", "not in our", "no longer",
-                        ])
-                        _has_real_urgency = any(kw in prompt.lower() for kw in HANDOFF_KEYWORDS)
-                        if _is_complete_denial and not _has_real_urgency:
-                            _needs_handoff_final = False
-
-                    if _needs_handoff_final:
-                        try:
-                            _b3 = tenancy.account_branding(_get_supabase(), cid)
-                            _wa3 = (_b3.get("whatsapp_number") or "").strip()
-                            if _wa3:
-                                import urllib.parse as _urlp3
-                                _biz3 = (_b3.get("business_name") or "our team").strip()
-                                _ctx3 = f"Hi {_biz3}, I was asking: \"{prompt[:150]}\" and need some help."
-                                _resp2["handoff"] = True
-                                _resp2["whatsapp"] = f"https://wa.me/{_wa3}?text={_urlp3.quote(_ctx3)}"
-                        except Exception:
-                            pass
-                    return JSONResponse(_resp2)
-
-                # Structured output unavailable or failed for this model —
-                # fall back to the existing free-text + hallucination-guard
-                # path below, so the app still works even if a given model
-                # does not honor the schema.
                 smart = smart_match_products(prompt, all_prods)
                 matched = [m[0] for m in smart] if smart else []
                 if not matched:
                     matched = all_prods
 
                 if matched:
-                    lines = []
+                    lines_pi = []
                     for p in matched[:30]:
                         stock_status = "In stock" if p.get("in_stock") else "Out of stock"
-                        lines.append(
+                        lines_pi.append(
                             f"{p['name']} | ZAR {float(p.get('price') or 0):.2f} | {stock_status} | "
                             f"Size: {p.get('size_cm', '?')}cm | {p.get('material', '')}"
                         )
                     enhanced = (
                         prompt
                         + "\n\n[PRODUCT INFO — this is the COMPLETE list of what is actually available. Only mention items, types or categories that appear below. NEVER suggest a category (like blankets, pillows, clothing) that is not in this list, even as a question.]\n"
-                        + "\n".join(lines)
+                        + "\n".join(lines_pi)
                         + "\n[END PRODUCT INFO]"
                     )
             except Exception as prod_err:
