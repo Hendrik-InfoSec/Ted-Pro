@@ -4266,6 +4266,40 @@ async def widget_chat(request: Request):
 
         if all_prods and _is_substantive:
             try:
+                # A specific large-quantity request ("60 of them", "get me 40")
+                # is a bulk/wholesale inquiry, not a normal add-to-cart question.
+                # Ted has no real way to confirm bulk availability from a simple
+                # in_stock flag, and letting the AI (deterministic or generative)
+                # answer it risks an implied commitment nobody can actually
+                # honor. Caught here, before any other path, and sent straight
+                # to a human — real number, real conversation, not a guess.
+                import re as _re_qty
+                _ql_qty = prompt.lower()
+                _has_purchase_intent = any(kw in _ql_qty for kw in [
+                    "get", "want", "buy", "order", "need", "of them", "of it",
+                    "units", "pieces", "can i have", "can i get",
+                ])
+                _qty_match = _re_qty.search(r"\b(\d{2,})\b", prompt)
+                if _has_purchase_intent and _qty_match and int(_qty_match.group(1)) >= 15:
+                    _bulk_msg = (
+                        f"For an order of {_qty_match.group(1)}, I'd like our team to "
+                        "confirm availability and pricing directly with you rather than guess. 🧸"
+                    )
+                    save_history_row(sid, prompt, _bulk_msg, cid)
+                    _resp_bulk = {"response": _bulk_msg}
+                    try:
+                        _b_bulk = tenancy.account_branding(_get_supabase(), cid)
+                        _wa_bulk = (_b_bulk.get("whatsapp_number") or "").strip()
+                        if _wa_bulk:
+                            import urllib.parse as _urlp_bulk
+                            _biz_bulk = (_b_bulk.get("business_name") or "our team").strip()
+                            _ctx_bulk = f"Hi {_biz_bulk}, I was asking: \"{prompt[:150]}\" and need some help."
+                            _resp_bulk["handoff"] = True
+                            _resp_bulk["whatsapp"] = f"https://wa.me/{_wa_bulk}?text={_urlp_bulk.quote(_ctx_bulk)}"
+                    except Exception:
+                        pass
+                    return JSONResponse(_resp_bulk)
+
                 # Resolve pronoun follow-ups ("is it in stock?") to the actual
                 # product being discussed before attempting a direct answer.
                 _resolved_prompt = resolve_pronoun_reference(prompt, history, all_prods)
