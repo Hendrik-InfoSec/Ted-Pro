@@ -351,6 +351,11 @@ class HybridEngine:
             "\'thanks\', a question unrelated to products), return an empty "
             "list and just reply naturally. Set needs_handoff true only if "
             "you genuinely cannot help and a human should take over."
+            "CRITICAL: you cannot place, prepare, process, confirm, or take\n"
+            "any order yourself -- that capability does not exist. Never claim\n"
+            "you will prepare, place, process, or confirm an order. Only ever\n"
+            "offer to add an item to their cart, or connect them with the team\n"
+            "for anything you cannot directly confirm yourself.\n"
         )
 
         messages = [{"role": "system", "content": system_prompt}]
