@@ -322,6 +322,111 @@ class HybridEngine:
             self.logger.error(f"Stream error: {e}")
             yield "I'm having trouble connecting right now. Please try again! \U0001f9f8"
 
+    def get_structured_answer(self, question: str, business_name: str,
+                              business_type: str, business_location: str,
+                              products_context: str, chat_history: list = None) -> dict:
+        """
+        The AI selects which real product IDs are relevant and supplies only
+        the conversational wrapper text. It never types a product name, price,
+        or category into free text -- so it cannot fabricate one. Every ID it
+        returns gets checked against the real database by the caller before
+        anything is rendered to the customer. Returns a dict with reply_tone,
+        selected_product_ids, and needs_handoff -- or None if the call failed
+        or the model did not honor the schema, so the caller can fall back.
+        """
+        system_prompt = (
+            f"You are {business_name}\'s AI sales assistant, a {business_type} "
+            f"based in {business_location}. Below is the real product catalog, "
+            "each with a real ID.\n\n"
+            + products_context +
+            "\n\nYou must respond with structured JSON only. In reply_tone, "
+            "write a short, warm, natural reply -- but NEVER include a specific "
+            "product name, price, or category there, since that text is not "
+            "verified against real data. In selected_product_ids, list the "
+            "real IDs (from the catalog above) that are relevant to this "
+            "reply -- an empty list if none apply, ALL matching IDs if the "
+            "customer explicitly asks for everything or the full range, or "
+            "a small relevant handful for a vague browsing question. If the "
+            "customer is just reacting conversationally (\'I love it\', "
+            "\'thanks\', a question unrelated to products), return an empty "
+            "list and just reply naturally. Set needs_handoff true only if "
+            "you genuinely cannot help and a human should take over."
+        )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for turn in (chat_history or [])[-10:]:
+            role = turn.get("role")
+            text = turn.get("content", "")
+            if role in ("user", "assistant") and text:
+                messages.append({"role": role, "content": text})
+        messages.append({"role": "user", "content": question})
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "reply_tone": {
+                    "type": "string",
+                    "description": "Natural conversational reply. No product names, prices, or categories.",
+                },
+                "selected_product_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Real product IDs from the catalog relevant to this reply. Empty if none.",
+                },
+                "needs_handoff": {
+                    "type": "boolean",
+                    "description": "True only if a human should take over.",
+                },
+            },
+            "required": ["reply_tone", "selected_product_ids", "needs_handoff"],
+            "additionalProperties": False,
+        }
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 400,
+            "reasoning": {"enabled": False},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "ted_reply",
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": os.getenv("SITE_URL", "https://ted-pro.onrender.com"),
+            "X-Title": "TedPro Assistant",
+        }
+
+        for attempt in range(2):
+            try:
+                response = requests.post(self.api_url, headers=headers, json=payload, timeout=20)
+                if response.status_code != 200:
+                    self.logger.error(f"Structured output API error {response.status_code}: {response.text[:200]}")
+                    return None
+                resp_json = response.json()
+                actual_model = resp_json.get("model", "")
+                if actual_model:
+                    self.logger.info(f"Structured answer by model: {actual_model}")
+                raw_content = resp_json["choices"][0]["message"]["content"]
+                parsed = json.loads(raw_content)
+                if not isinstance(parsed.get("selected_product_ids"), list):
+                    self.logger.warning("Structured output missing expected fields, falling back")
+                    return None
+                return parsed
+            except Exception as e:
+                self.logger.error(f"Structured answer attempt {attempt + 1} failed: {e}")
+                if attempt == 1:
+                    return None
+                time.sleep(1)
+        return None
+
     def get_api_answer(self, question: str, stream: bool = True,
                        system_prompt: Optional[str] = None,
                        chat_history: list = None) -> Generator[str, None, None]:
