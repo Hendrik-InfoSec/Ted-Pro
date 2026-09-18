@@ -4243,7 +4243,7 @@ async def widget_chat(request: Request):
         try:
             sb3 = _get_supabase()
             all_prods = sb3.table("products").select(
-                "name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
+                "id,name,price,currency,in_stock,stock_quantity,description,size_cm,material,customisable,category"
             ).eq("client_id", cid).execute().data or []
         except Exception as _fe:
             logger.error(f"Product fetch error: {_fe}")
@@ -4279,7 +4279,77 @@ async def widget_chat(request: Request):
                         _resp["show_lead"] = True
                     return JSONResponse(_resp)
 
-                # Otherwise use smart matching to give AI the right products
+                # No specific factual question — try the structured-output
+                # path first: the AI can only SELECT real product IDs, never
+                # type a name/price/category into free text. This closes the
+                # entire category-hallucination problem structurally, for
+                # any client's catalog, with zero per-client word lists.
+                _structured_result = None
+                try:
+                    _id_lines = []
+                    for p in all_prods[:30]:
+                        stock_status = "In stock" if p.get("in_stock") else "Out of stock"
+                        _id_lines.append(
+                            f"id: {p.get('id')} | {p['name']} | ZAR {float(p.get('price') or 0):.2f} | "
+                            f"{stock_status} | Size: {p.get('size_cm', '?')}cm | {p.get('material', '')}"
+                        )
+                    _products_context = "\n".join(_id_lines)
+                    _bname = (tenancy.account_branding(_get_supabase(), cid).get("business_name") or "our shop")
+                    _structured_result = get_engine(cid).get_structured_answer(
+                        question=prompt,
+                        business_name=_bname,
+                        business_type="retail business",
+                        business_location="South Africa",
+                        products_context=_products_context,
+                        chat_history=history,
+                    )
+                except Exception as _struct_err:
+                    logger.error(f"Structured answer error: {_struct_err}")
+                    _structured_result = None
+
+                if _structured_result is not None:
+                    # Validate: every returned ID must actually exist in this
+                    # client's real catalog. An ID the AI invented (or one
+                    # belonging to a different client entirely) is silently
+                    # dropped here — not rendered, not trusted.
+                    _real_ids = {str(p.get("id")): p for p in all_prods}
+                    _verified = [
+                        _real_ids[str(pid)] for pid in _structured_result.get("selected_product_ids", [])
+                        if str(pid) in _real_ids
+                    ]
+                    _tone = str(_structured_result.get("reply_tone") or "").strip()
+                    if _verified:
+                        _fact_lines = []
+                        for p in _verified:
+                            _stk = "in stock" if p.get("in_stock") else "out of stock"
+                            _fact_lines.append(f"{p.get('name')} — ZAR {float(p.get('price') or 0):.2f} ({_stk})")
+                        _facts = " • ".join(_fact_lines)
+                        final_structured = (_tone + " " if _tone else "") + _facts
+                    else:
+                        final_structured = _tone or "How can I help you today?"
+                    final_structured = _strip_urls(final_structured)
+                    save_history_row(sid, prompt, final_structured, cid)
+                    _resp2 = {"response": final_structured}
+                    if show_lead:
+                        _resp2["show_lead"] = True
+                    if _structured_result.get("needs_handoff"):
+                        try:
+                            _b3 = tenancy.account_branding(_get_supabase(), cid)
+                            _wa3 = (_b3.get("whatsapp_number") or "").strip()
+                            if _wa3:
+                                import urllib.parse as _urlp3
+                                _biz3 = (_b3.get("business_name") or "our team").strip()
+                                _ctx3 = f"Hi {_biz3}, I was asking: \"{prompt[:150]}\" and need some help."
+                                _resp2["handoff"] = True
+                                _resp2["whatsapp"] = f"https://wa.me/{_wa3}?text={_urlp3.quote(_ctx3)}"
+                        except Exception:
+                            pass
+                    return JSONResponse(_resp2)
+
+                # Structured output unavailable or failed for this model —
+                # fall back to the existing free-text + hallucination-guard
+                # path below, so the app still works even if a given model
+                # does not honor the schema.
                 smart = smart_match_products(prompt, all_prods)
                 matched = [m[0] for m in smart] if smart else []
                 if not matched:
