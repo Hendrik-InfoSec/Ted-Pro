@@ -4355,7 +4355,22 @@ async def widget_chat(request: Request):
                         if str(pid) in _real_ids
                     ]
                     _tone = str(_structured_result.get("reply_tone") or "").strip()
-                    if _verified:
+
+                    # A short pure reaction ("thats awesome", "nice one") is a
+                    # complete reply on its own — don't drag facts from earlier
+                    # in the conversation back into it just because the AI
+                    # carried a product ID over from context. Only suppress
+                    # rendering, never suppress the underlying verification —
+                    # if a later message asks about the product again, it's
+                    # re-verified fresh at that point, same as always.
+                    _ql_reaction = prompt.lower().strip().rstrip("!.?")
+                    _is_pure_reaction = len(_ql_reaction.split()) <= 4 and any(
+                        w in _ql_reaction for w in [
+                            "awesome", "amazing", "great", "nice", "cool", "love",
+                            "perfect", "sounds good", "thanks", "thank you", "cheers",
+                        ]
+                    )
+                    if _verified and not _is_pure_reaction:
                         _fact_lines = []
                         for p in _verified:
                             _stk = "in stock" if p.get("in_stock") else "out of stock"
@@ -4369,7 +4384,25 @@ async def widget_chat(request: Request):
                     _resp2 = {"response": final_structured}
                     if show_lead:
                         _resp2["show_lead"] = True
-                    if _structured_result.get("needs_handoff"):
+
+                    # A reply that already gives a clear, complete "we don't
+                    # have that" doesn't need a handoff bolted on too — that's
+                    # already a full answer, not a dead end. Only suppress
+                    # this when the customer's own message has no real
+                    # urgency signal (HANDOFF_KEYWORDS) — a genuine complaint
+                    # or explicit request for a person still gets connected.
+                    _needs_handoff_final = bool(_structured_result.get("needs_handoff"))
+                    if _needs_handoff_final:
+                        _tone_lower = _tone.lower()
+                        _is_complete_denial = any(p in _tone_lower for p in [
+                            "don't have", "do not have", "don't carry", "do not carry",
+                            "not available", "not in our", "no longer",
+                        ])
+                        _has_real_urgency = any(kw in prompt.lower() for kw in HANDOFF_KEYWORDS)
+                        if _is_complete_denial and not _has_real_urgency:
+                            _needs_handoff_final = False
+
+                    if _needs_handoff_final:
                         try:
                             _b3 = tenancy.account_branding(_get_supabase(), cid)
                             _wa3 = (_b3.get("whatsapp_number") or "").strip()
