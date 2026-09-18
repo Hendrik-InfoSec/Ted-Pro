@@ -4285,6 +4285,7 @@ async def widget_chat(request: Request):
                 # entire category-hallucination problem structurally, for
                 # any client's catalog, with zero per-client word lists.
                 _structured_result = None
+                logger.info(f"[STRUCTURED] Attempting structured path for: {prompt[:60]!r}")
                 try:
                     _id_lines = []
                     for p in all_prods[:30]:
@@ -4295,6 +4296,7 @@ async def widget_chat(request: Request):
                         )
                     _products_context = "\n".join(_id_lines)
                     _bname = (tenancy.account_branding(_get_supabase(), cid).get("business_name") or "our shop")
+                    logger.info(f"[STRUCTURED] Calling get_structured_answer with {len(all_prods)} products")
                     _structured_result = get_engine(cid).get_structured_answer(
                         question=prompt,
                         business_name=_bname,
@@ -4303,8 +4305,9 @@ async def widget_chat(request: Request):
                         products_context=_products_context,
                         chat_history=history,
                     )
+                    logger.info(f"[STRUCTURED] Result: {_structured_result!r}")
                 except Exception as _struct_err:
-                    logger.error(f"Structured answer error: {_struct_err}")
+                    logger.error(f"[STRUCTURED] Exception: {type(_struct_err).__name__}: {_struct_err}")
                     _structured_result = None
 
                 if _structured_result is not None:
