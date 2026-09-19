@@ -905,6 +905,24 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
     ]
     _tone = str(_structured_result.get("reply_tone") or "").strip()
 
+    # "Show me the full catalog" is a universal request pattern — it means
+    # the same thing regardless of what a business sells, unlike a specific
+    # category word. The AI doesn't reliably select every ID on its own for
+    # this ask (confirmed: identical requests worded slightly differently
+    # got inconsistent results), so this one case is made deterministic —
+    # if the phrasing clearly asks for everything, show everything for real,
+    # overriding whatever subset the AI happened to select.
+    _ql_full = prompt.lower()
+    _wants_everything = any(kw in _ql_full for kw in [
+        "full catalog", "full list", "full range", "entire catalog",
+        "entire list", "everything you have", "everything you sell",
+        "everything you offer", "everything in stock", "all your products",
+        "all of your products", "see everything", "show me everything",
+        "whole catalog", "whole range", "complete list", "complete catalog",
+    ])
+    if _wants_everything:
+        _verified = list(all_prods)
+
     # A short pure reaction ("thats awesome") is a complete reply on its own —
     # don't drag facts from earlier context back into it.
     _ql_reaction = prompt.lower().strip().rstrip("!.?")
