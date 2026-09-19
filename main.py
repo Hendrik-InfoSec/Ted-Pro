@@ -877,12 +877,17 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
                 f"{stock_status} | Size: {p.get('size_cm', '?')}cm | {p.get('material', '')}"
             )
         _products_context = "\n".join(_id_lines)
-        _bname = (tenancy.account_branding(_get_supabase(), cid).get("business_name") or "our shop")
+        _branding = tenancy.account_branding(_get_supabase(), cid)
+        _bname = _branding.get("business_name") or "our shop"
+        # Real business type per client, not a hardcoded guess — a roofing
+        # company and a plushie shop should not be treated identically by
+        # the AI's own understanding of what kind of business it represents.
+        _btype = _branding.get("business_type") or "small business"
         logger.info(f"[STRUCTURED] Calling get_structured_answer with {len(all_prods)} products")
         _structured_result = get_engine(cid).get_structured_answer(
             question=prompt,
             business_name=_bname,
-            business_type="retail business",
+            business_type=_btype,
             business_location="South Africa",
             products_context=_products_context,
             chat_history=history,
