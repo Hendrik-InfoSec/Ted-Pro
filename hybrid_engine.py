@@ -356,6 +356,14 @@ class HybridEngine:
             "you will prepare, place, process, or confirm an order. Only ever\n"
             "offer to add an item to their cart, or connect them with the team\n"
             "for anything you cannot directly confirm yourself.\n"
+            "If the customer asks something with nothing to do with\n"
+            "products (a joke, small talk, a general question), answer it\n"
+            "directly and completely right there in reply_tone. Never say\n"
+            "things like \"here is one\" or \"let me get that for you\" without\n"
+            "actually including the full answer in the same reply -- you\n"
+            "cannot follow up with more later, this is your only chance to\n"
+            "answer. Keep it brief, then gently invite them back to asking\n"
+            "about products if that fits naturally.\n"
         )
 
         messages = [{"role": "system", "content": system_prompt}]
