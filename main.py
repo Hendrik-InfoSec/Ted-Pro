@@ -1276,16 +1276,25 @@ def bot_bubble(text: str, t: str) -> str:
         f'</script>'
     )
 
-def handoff_bubble(customer_query: str = "") -> str:
+def handoff_bubble(customer_query: str = "", wa_link_override: str = "") -> str:
     """A WhatsApp CTA bubble injected when human handoff is needed. Carries
     the customer's actual question into the WhatsApp message when available,
     so they don't have to repeat themselves to the human — the single most
-    commonly cited failure in chatbot handoff research."""
+    commonly cited failure in chatbot handoff research.
+
+    If a caller already computed the correct, per-client WhatsApp link with
+    real context (as get_structured_reply does), pass it as wa_link_override
+    so it's used directly instead of being silently discarded in favour of
+    a hardcoded CuddleHeros-only link — this legacy page defaults to
+    CuddleHeros only when no override is given."""
     import urllib.parse as _urlp3
-    wa_link = "https://wa.me/27836205614"
-    if customer_query:
-        ctx = f"Hi CuddleHeros, I was asking: \"{customer_query[:150]}\" and need some help. \U0001f9f8"
-        wa_link = f"{wa_link}?text={_urlp3.quote(ctx)}"
+    if wa_link_override:
+        wa_link = wa_link_override
+    else:
+        wa_link = "https://wa.me/27836205614"
+        if customer_query:
+            ctx = f"Hi CuddleHeros, I was asking: \"{customer_query[:150]}\" and need some help. \U0001f9f8"
+            wa_link = f"{wa_link}?text={_urlp3.quote(ctx)}"
     return (
         '<div class="flex justify-start fade-in mb-3">'
         '<div class="flex items-end gap-2 max-w-[85%] md:max-w-[70%]">'
@@ -2136,19 +2145,40 @@ async def chat_page(request: Request):
             '</div></div>'
         )
 
-    quick_qs = [
-        ("Pricing \U0001f4b0", "What are your prices?"),
-        ("Shipping \U0001f4e6", "How does shipping work?"),
-        ("Custom \U0001f3a8",   "Can I order custom plushies?"),
-        ("Safety \u2705",       "Are your plushies safe for kids?"),
-    ]
+    # Quick buttons come from this client's own real FAQs — same approach as
+    # the widget — instead of hardcoded CuddleHeros-specific questions that
+    # never reflect what a real client actually configured.
+    _chat_page_cid = client_for(request)
+    quick_qs = []
+    try:
+        _sb_qq = _get_supabase()
+        _faqs_qq = (_sb_qq.table("faqs").select("question,category")
+                    .eq("client_id", _chat_page_cid).eq("active", True)
+                    .order("category").limit(20).execute().data or [])
+        _seen_cats_qq = set()
+        for _f in _faqs_qq:
+            _cat = (_f.get("category") or "General").strip()
+            if _cat not in _seen_cats_qq and len(quick_qs) < 4:
+                _seen_cats_qq.add(_cat)
+                _q_text = _f["question"]
+                _label = _q_text[:22] + ("…" if len(_q_text) > 22 else "")
+                quick_qs.append((_label, _q_text))
+    except Exception as _qq_err:
+        logger.error(f"Quick button FAQ fetch error: {_qq_err}")
+    if not quick_qs:
+        # No FAQs configured yet — fall back to generic starters so the
+        # row is never empty, rather than assuming plushie-specific content.
+        quick_qs = [
+            ("Pricing \U0001f4b0", "What are your prices?"),
+            ("Shipping \U0001f4e6", "How does shipping work?"),
+        ]
     quick_html = "".join(
         f'<button '
         f'hx-post="/chat" hx-target="#chat-messages" hx-swap="beforeend" '
-        f'hx-vals=\'{{"prompt":"{query}"}}\' '
+        f'hx-vals=\'{{"prompt":"{_esc_html(query)}"}}\' '
         f'class="px-3 py-2 rounded-full bg-white border-2 border-[#FFE4CC] text-[#5A3A1B] text-xs font-semibold '
         f'hover:bg-[#FF922B] hover:text-white hover:border-[#FF922B] transition-all shadow-sm whitespace-nowrap">'
-        f'{label}</button>'
+        f'{_esc_html(label)}</button>'
         for label, query in quick_qs
     )
 
@@ -2391,7 +2421,9 @@ async def chat_response(request: Request):
                     store["ready"]      = True
                     store["processing"] = False
                     if _shared_result.get("handoff"):
-                        return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble(query))
+                        return HTMLResponse(content=bot_bubble(final, t) + handoff_bubble(
+                            query, wa_link_override=_shared_result.get("whatsapp", "")
+                        ))
                     return HTMLResponse(content=bot_bubble(final, t))
 
                 # Structured output unavailable or failed for this model —
