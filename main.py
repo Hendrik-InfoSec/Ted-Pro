@@ -1,11 +1,13 @@
 import os
 import uuid
 import time
+import json
 import smtplib
 import logging
 import hashlib
 import hmac
 import secrets
+import requests
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -3379,6 +3381,229 @@ async def admin_logout(request: Request):
         return RedirectResponse(url=f"/admin?client={cid}", status_code=303)
     return RedirectResponse(url="/admin", status_code=303)
 
+# ---------------------------------------------------------------------------
+# Billing — Yoco checkout creation + payment webhook. Adapted from working,
+# tested code recovered from an earlier Telegram bot project. Automatically
+# extends an account's paid_until date on real, verified payment — the
+# manual account_status switch stays as a backup override, but this closes
+# the loop so a real payment is actually recognized without hand-editing
+# the database.
+# ---------------------------------------------------------------------------
+YOCO_SECRET_KEY = os.environ.get("YOCO_SECRET_KEY", "")
+YOCO_WEBHOOK_SECRET = os.environ.get("YOCO_WEBHOOK_SECRET", "")
+YOCO_CHECKOUT_URL = "https://payments.yoco.com/api/checkouts"
+
+
+def create_yoco_checkout(amount_zar_rands: float, client_id: str, business_name: str, base_url: str) -> dict | None:
+    """
+    Creates a hosted Yoco checkout for a specific client's payment. Amount is
+    given in Rands and converted to cents here, matching Yoco's API. Returns
+    the full response dict (including redirectUrl) or None on failure.
+    """
+    if not YOCO_SECRET_KEY:
+        logger.error("YOCO_SECRET_KEY not configured — cannot create checkout")
+        return None
+    headers = {"Authorization": f"Bearer {YOCO_SECRET_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "amount": int(round(amount_zar_rands * 100)),
+        "currency": "ZAR",
+        "metadata": {"client_id": client_id, "business_name": business_name},
+        "successUrl": f"{base_url}/admin/billing/success",
+        "cancelUrl": f"{base_url}/admin/billing",
+    }
+    try:
+        resp = requests.post(YOCO_CHECKOUT_URL, json=payload, headers=headers, timeout=15)
+        if resp.status_code not in (200, 201):
+            logger.error(f"Yoco checkout creation failed status={resp.status_code} body={resp.text[:300]}")
+            return None
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Yoco checkout creation error: {e}")
+        return None
+
+
+def verify_yoco_webhook(payload_bytes: bytes, headers: dict, secret: str, tolerance_seconds: int = 300) -> bool:
+    """
+    Yoco follows the open Standard Webhooks specification. Verifies the
+    HMAC-SHA256 signature over "{webhook-id}.{webhook-timestamp}.{payload}"
+    using constant-time comparison, and rejects anything outside a 5-minute
+    timestamp window to block replay attacks. Without this, anyone could
+    POST a fake "payment succeeded" event and mark their account paid for
+    free — this check is what makes the webhook trustworthy at all.
+    """
+    if not secret:
+        logger.error("YOCO_WEBHOOK_SECRET not configured — rejecting webhook")
+        return False
+    webhook_id = headers.get("webhook-id", "")
+    webhook_timestamp = headers.get("webhook-timestamp", "")
+    webhook_signature = headers.get("webhook-signature", "")
+    if not (webhook_id and webhook_timestamp and webhook_signature):
+        return False
+    try:
+        ts = int(webhook_timestamp)
+        if abs(time.time() - ts) > tolerance_seconds:
+            logger.warning("Yoco webhook rejected: timestamp outside tolerance window")
+            return False
+    except ValueError:
+        return False
+
+    signed_content = f"{webhook_id}.{webhook_timestamp}.{payload_bytes.decode('utf-8')}"
+    secret_bytes = secret.encode("utf-8")
+    if secret.startswith("whsec_"):
+        import base64 as _b64
+        try:
+            secret_bytes = _b64.b64decode(secret[len("whsec_"):])
+        except Exception:
+            secret_bytes = secret.encode("utf-8")
+
+    import base64 as _b64_2
+    expected_sig = _b64_2.b64encode(
+        hmac.new(secret_bytes, signed_content.encode("utf-8"), hashlib.sha256).digest()
+    ).decode()
+
+    for sig_pair in webhook_signature.split(" "):
+        if "," in sig_pair:
+            _version, sig = sig_pair.split(",", 1)
+            if hmac.compare_digest(sig, expected_sig):
+                return True
+    return False
+
+
+@app.get("/admin/billing", response_class=HTMLResponse)
+async def admin_billing_page(request: Request):
+    """Generate a real Yoco payment link for this client's account, and see
+    the current paid_until date. The client gets sent this link manually —
+    no automated recurring subscription yet, that's a later, bigger step."""
+    acid = admin_client(request)
+    if not acid:
+        return RedirectResponse(url="/admin", status_code=303)
+    try:
+        sb = _get_supabase()
+        acct = tenancy.get_account(sb, acid) or {}
+        paid_until = acct.get("paid_until", "")
+        biz = acct.get("business_name", "your business")
+        content = (
+            "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-lg mx-auto'>"
+            "<div class='flex justify-between items-center mb-6'>"
+            "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f4b3 Billing</h1>"
+            "<a href='/admin' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Back to Admin</a></div>"
+            "<div class='bg-white rounded-xl border border-[#FFE4CC] p-5 mb-4'>"
+            f"<p class='text-sm text-[#5A3A1B] mb-1'>Business: <strong>{_esc_html(biz)}</strong></p>"
+            f"<p class='text-sm text-[#5A3A1B]'>Paid until: <strong>{_esc_html(str(paid_until)[:10] or 'Not set')}</strong></p>"
+            "</div>"
+            "<div class='bg-white rounded-xl border border-[#FFE4CC] p-5'>"
+            "<p class='text-sm text-[#5A3A1B] mb-3'>Generate a real payment link for this client. Send it to them directly — paid_until extends automatically once Yoco confirms payment.</p>"
+            "<input id='bill-amount' type='number' placeholder='Amount in Rands (e.g. 1299)' style='padding:9px 12px;border:1px solid #FFD5A5;border-radius:8px;font-size:14px;width:100%;margin-bottom:10px'>"
+            "<button onclick='genLink()' style='padding:10px 20px;background:#FF922B;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer'>Generate payment link</button>"
+            "<div id='bill-result' style='margin-top:12px;font-size:13px'></div>"
+            "</div></div></div>"
+            "<script>"
+            "function genLink(){"
+            "  var amt=document.getElementById('bill-amount').value;"
+            "  var res=document.getElementById('bill-result');"
+            "  if(!amt||amt<=0){res.textContent='Enter a valid amount.';res.style.color='#991b1b';return;}"
+            "  res.textContent='Generating...';res.style.color='#8B6914';"
+            "  fetch('/admin/billing/create-link',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:'amount='+amt})"
+            "  .then(function(r){return r.json();}).then(function(d){"
+            "    if(d.ok){res.innerHTML='<a href=\"'+d.url+'\" target=\"_blank\" style=\"color:#FF922B;text-decoration:underline;word-break:break-all\">'+d.url+'</a>';}"
+            "    else{res.textContent='Error: '+(d.error||'failed');res.style.color='#991b1b';}"
+            "  }).catch(function(e){res.textContent=e.message;res.style.color='#991b1b';});"
+            "}"
+            "</script>"
+        )
+        return HTMLResponse(content=render_page("Billing", content))
+    except Exception as e:
+        logger.error(f"admin_billing_page error: {e}")
+        return HTMLResponse(f"<div class='p-8 text-red-500'>Error: {e}</div>")
+
+
+@app.post("/admin/billing/create-link")
+async def admin_billing_create_link(request: Request, amount: float = Form(...)):
+    acid = admin_client(request)
+    if not acid:
+        return JSONResponse({"ok": False, "error": "Not authenticated"}, status_code=401)
+    if not validate_csrf_token(request):
+        return JSONResponse({"ok": False, "error": "Invalid or missing CSRF token — please refresh and try again."}, status_code=403)
+    if amount <= 0:
+        return JSONResponse({"ok": False, "error": "Amount must be positive"}, status_code=400)
+    try:
+        sb = _get_supabase()
+        acct = tenancy.get_account(sb, acid) or {}
+        biz = acct.get("business_name", "TedPro client")
+        base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
+        checkout = create_yoco_checkout(amount, acid, biz, base)
+        if not checkout or "redirectUrl" not in checkout:
+            return JSONResponse({"ok": False, "error": "Yoco did not return a payment link"}, status_code=502)
+        return JSONResponse({"ok": True, "url": checkout["redirectUrl"]})
+    except Exception as e:
+        logger.error(f"admin_billing_create_link error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/admin/billing/success", response_class=HTMLResponse)
+async def admin_billing_success(request: Request):
+    return HTMLResponse(content=render_page("Payment received", (
+        "<div class='min-h-screen flex items-center justify-center'>"
+        "<div class='bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] text-center max-w-sm'>"
+        "<div class='text-4xl mb-4'>\u2705</div>"
+        "<h1 class='text-xl font-bold text-[#2D1B00]'>Payment received!</h1>"
+        "<p class='text-sm text-[#8B6914] mt-2'>Thank you — this may take a minute to reflect in the dashboard.</p>"
+        "</div></div>"
+    )))
+
+
+@app.post("/webhook/yoco-payment")
+async def webhook_yoco_payment(request: Request):
+    """Yoco calls this after a payment completes. Verified via Standard
+    Webhooks signature before anything is trusted — an unverified request
+    here could let anyone mark an account as paid for free."""
+    raw_body = await request.body()
+    if not verify_yoco_webhook(raw_body, dict(request.headers), YOCO_WEBHOOK_SECRET):
+        return JSONResponse({"ok": False, "error": "Invalid signature"}, status_code=401)
+    try:
+        event = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+
+    if event.get("type") != "payment.succeeded":
+        return JSONResponse({"ok": True, "skipped": True})
+
+    try:
+        metadata = event.get("payload", {}).get("metadata", {}) or {}
+        client_id = metadata.get("client_id")
+        if not client_id:
+            logger.warning("Yoco webhook: payment succeeded with no client_id in metadata")
+            return JSONResponse({"ok": False, "error": "No client_id in metadata"}, status_code=400)
+
+        sb = _get_supabase()
+        acct = tenancy.get_account(sb, client_id)
+        if not acct:
+            logger.warning(f"Yoco webhook: payment for unknown client_id {client_id}")
+            return JSONResponse({"ok": False, "error": "Unknown client"}, status_code=404)
+
+        current_paid_until = acct.get("paid_until")
+        now = datetime.now()
+        base_date = now
+        if current_paid_until:
+            try:
+                existing = datetime.fromisoformat(str(current_paid_until).replace("Z", "+00:00")).replace(tzinfo=None)
+                if existing > now:
+                    base_date = existing
+            except Exception:
+                pass
+        new_paid_until = (base_date + timedelta(days=30)).isoformat()
+
+        sb.table("accounts").update({
+            "paid_until": new_paid_until,
+            "account_status": "active",
+        }).eq("client_id", client_id).execute()
+        logger.info(f"Payment confirmed for {client_id}, paid_until extended to {new_paid_until}")
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error(f"webhook_yoco_payment processing error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/webhook/order")
 async def webhook_order(request: Request):
     """
@@ -4360,6 +4585,18 @@ async def widget_chat(request: Request):
                 _acct = tenancy.get_account(_get_supabase(), cid)
                 if _acct and _acct.get("account_status") in ("suspended", "cancelled"):
                     return JSONResponse({"response": "This assistant is currently unavailable. Please contact the business directly."})
+                # Payment activates an account automatically via the webhook —
+                # expiry should be recognized automatically too, not only on
+                # a manual check. Without this, a client could pay once and
+                # never actually need to pay again.
+                _paid_until = _acct.get("paid_until") if _acct else None
+                if _paid_until:
+                    try:
+                        _expiry = datetime.fromisoformat(str(_paid_until).replace("Z", "+00:00")).replace(tzinfo=None)
+                        if _expiry < datetime.now():
+                            return JSONResponse({"response": "This assistant is currently unavailable. Please contact the business directly."})
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
