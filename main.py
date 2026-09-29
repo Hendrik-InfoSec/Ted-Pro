@@ -939,6 +939,36 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
             "perfect", "sounds good", "thanks", "thank you", "cheers",
         ]
     )
+    # If this client has genuinely no products in the system at all, and the
+    # AI still tried to select one or more product IDs, that is definitive
+    # proof it is hallucinating a product's existence -- there is nothing
+    # real for it to have selected. This does not rely on parsing the AI's
+    # free-text tone (which can imply "yes we have that" without naming a
+    # specific fact, sliding past a tone-based check) -- the mere presence
+    # of a selection attempt against an empty catalog is unambiguous on its
+    # own. A brand-new signup with no products uploaded yet is exactly the
+    # account most likely to hit this.
+    _empty_catalog_hallucination = (not all_prods) and bool(_structured_result.get("selected_product_ids"))
+
+    if _empty_catalog_hallucination:
+        final_structured = (
+            "We haven't loaded our product catalog into the system yet, so I can't confirm "
+            "specific items right now. Let me connect you with the team directly for that."
+        )
+        result = {"response": final_structured, "ai_failed": False}
+        try:
+            _b_ec = tenancy.account_branding(_get_supabase(), cid)
+            _wa_ec = (_b_ec.get("whatsapp_number") or "").strip()
+            if _wa_ec:
+                import urllib.parse as _urlp_ec
+                _biz_ec = (_b_ec.get("business_name") or "our team").strip()
+                _ctx_ec = f"Hi {_biz_ec}, I was asking: \"{prompt[:150]}\" and need some help."
+                result["handoff"] = True
+                result["whatsapp"] = f"https://wa.me/{_wa_ec}?text={_urlp_ec.quote(_ctx_ec)}"
+        except Exception:
+            pass
+        return result
+
     if _verified and not _is_pure_reaction:
         _fact_lines = []
         for p in _verified:
@@ -4718,7 +4748,15 @@ async def widget_chat(request: Request):
         _is_greeting = q_lower.strip().rstrip("!.?") in _GREETINGS
         _is_substantive = (not _is_greeting) and len(q_lower.strip()) >= 3
 
-        if all_prods and _is_substantive:
+        if _is_substantive:
+            # Deliberately no all_prods check here: an empty catalog needs the
+            # safe structured pipeline MORE than a populated one, not less.
+            # The structured path can only render facts from verified real
+            # IDs, so a genuinely empty catalog naturally yields zero
+            # fabricated facts -- but only if it actually reaches this path.
+            # A brand new signup with no products uploaded yet is exactly
+            # the account most likely to hit this, and previously got the
+            # opposite of protection: the fully unguarded legacy fallback.
             _shared_result = get_structured_reply(prompt, all_prods, cid, history)
             if not _shared_result.get("ai_failed"):
                 final_resp = _shared_result["response"]
