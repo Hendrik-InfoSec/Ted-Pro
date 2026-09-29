@@ -939,16 +939,21 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
             "perfect", "sounds good", "thanks", "thank you", "cheers",
         ]
     )
-    # If this client has genuinely no products in the system at all, and the
-    # AI still tried to select one or more product IDs, that is definitive
-    # proof it is hallucinating a product's existence -- there is nothing
-    # real for it to have selected. This does not rely on parsing the AI's
-    # free-text tone (which can imply "yes we have that" without naming a
-    # specific fact, sliding past a tone-based check) -- the mere presence
-    # of a selection attempt against an empty catalog is unambiguous on its
-    # own. A brand-new signup with no products uploaded yet is exactly the
-    # account most likely to hit this.
-    _empty_catalog_hallucination = (not all_prods) and bool(_structured_result.get("selected_product_ids"))
+    # If this client has genuinely no products in the system at all, the
+    # AI's free-text reply_tone can never be trusted for a substantive
+    # question -- tested live and confirmed: the model can affirm "yes we
+    # have that" entirely within reply_tone, with selected_product_ids
+    # correctly empty, since it never claims a specific fact, just an
+    # impression. A signal check on selected_product_ids alone (an earlier,
+    # too-narrow version of this fix) misses that path entirely. There is
+    # nothing structurally verifiable to fall back on here, so for a
+    # genuinely empty catalog, any non-trivial question gets a safe,
+    # deterministic answer regardless of tone or phrasing -- the one
+    # exception is a pure conversational reaction, which never claims
+    # anything about products in the first place. A brand-new signup with
+    # no products uploaded yet is exactly the account most likely to hit
+    # this.
+    _empty_catalog_hallucination = (not all_prods) and not _is_pure_reaction
 
     if _empty_catalog_hallucination:
         final_structured = (
