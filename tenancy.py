@@ -287,6 +287,18 @@ def create_account(supabase, client_id: str, business_name: str,
         supabase.table("accounts").insert(row).execute()
         _known_clients.add(cid)  # keep cache fresh
         logger.info(f"Account created: {cid} ({business_name})")
+        # 14-day free trial: give every new account a real end date, so a
+        # self-serve signup doesn't stay free forever. The serving check
+        # stops the assistant once paid_until has passed; a Yoco payment
+        # extends it. Done as a separate update so that, if the paid_until
+        # column were ever missing, account creation itself still succeeds.
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+            _trial_end = (_dt.now() + _td(days=14)).isoformat()
+            supabase.table("accounts").update({"paid_until": _trial_end}).eq("client_id", cid).execute()
+            logger.info(f"Trial set for {cid}: paid_until {_trial_end}")
+        except Exception as te:
+            logger.warning(f"Could not set trial end date for {cid}: {te}")
         # Auto-create Supabase views for this client so their data is
         # easy to browse in the Supabase dashboard — no manual SQL needed.
         try:
