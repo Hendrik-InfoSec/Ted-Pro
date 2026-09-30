@@ -324,7 +324,8 @@ class HybridEngine:
 
     def get_structured_answer(self, question: str, business_name: str,
                               business_type: str, business_location: str,
-                              products_context: str, chat_history: list = None) -> dict:
+                              products_context: str, chat_history: list = None,
+                              faqs_context: str = "") -> dict:
         """
         The AI selects which real product IDs are relevant and supplies only
         the conversational wrapper text. It never types a product name, price,
@@ -334,11 +335,35 @@ class HybridEngine:
         selected_product_ids, and needs_handoff -- or None if the call failed
         or the model did not honor the schema, so the caller can fall back.
         """
+        # Businesses without a product catalog (service businesses, or a new
+        # signup that hasn't uploaded yet) get honest framing instead of a
+        # "catalog" that doesn't exist.
+        if products_context.strip():
+            catalog_block = ("Below is the real product catalog, each with a real ID.\n\n"
+                             + products_context)
+        else:
+            catalog_block = ("This business has no product catalog listed -- it may offer "
+                             "services rather than products. Never claim it sells, stocks or "
+                             "offers any specific product or service that is not stated in "
+                             "the FAQs below.")
+        # The business's own FAQs, each with a real ID. The AI only SELECTS
+        # which FAQ answers the question; the code shows that FAQ's real
+        # answer word for word. Same principle as products: the AI never
+        # writes a fact itself.
+        if faqs_context.strip():
+            faq_block = ("\n\nBelow are the business's own FAQs, each with a real ID:\n"
+                         + faqs_context +
+                         "\n\nIf one of these FAQs answers the customer's question (even if "
+                         "they word it differently), put that FAQ's ID in selected_faq_ids. "
+                         "The FAQ's own answer will be shown to the customer word for word, "
+                         "so do NOT restate any fact from it in reply_tone. If no FAQ answers "
+                         "the question, return an empty selected_faq_ids list.")
+        else:
+            faq_block = ""
         system_prompt = (
-            f"You are {business_name}\'s AI sales assistant, a {business_type} "
-            f"based in {business_location}. Below is the real product catalog, "
-            "each with a real ID.\n\n"
-            + products_context +
+            f"You are {business_name}\'s AI assistant, a {business_type} "
+            f"based in {business_location}. "
+            + catalog_block + faq_block +
             "\n\nYou must respond with structured JSON only. In reply_tone, "
             "write a short, warm, natural reply -- but NEVER include a specific "
             "product name, price, or category there, since that text is not "
@@ -386,12 +411,17 @@ class HybridEngine:
                     "items": {"type": "string"},
                     "description": "Real product IDs from the catalog relevant to this reply. Empty if none.",
                 },
+                "selected_faq_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Real FAQ IDs whose answer answers this question. Empty if none.",
+                },
                 "needs_handoff": {
                     "type": "boolean",
                     "description": "True only if a human should take over.",
                 },
             },
-            "required": ["reply_tone", "selected_product_ids", "needs_handoff"],
+            "required": ["reply_tone", "selected_product_ids", "selected_faq_ids", "needs_handoff"],
             "additionalProperties": False,
         }
 
@@ -432,6 +462,8 @@ class HybridEngine:
                 if not isinstance(parsed.get("selected_product_ids"), list):
                     self.logger.warning("Structured output missing expected fields, falling back")
                     return None
+                if not isinstance(parsed.get("selected_faq_ids"), list):
+                    parsed["selected_faq_ids"] = []
                 return parsed
             except Exception as e:
                 self.logger.error(f"Structured answer attempt {attempt + 1} failed: {e}")
