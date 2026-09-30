@@ -869,6 +869,12 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
     # No specific factual question — structured-output path: the AI selects
     # real product IDs, never types a name/price/category into free text.
     _structured_result = None
+    _faqs_for_ai = []
+    try:
+        _faqs_for_ai = (_get_supabase().table("faqs").select("id,question,answer")
+                        .eq("client_id", cid).eq("active", True).execute().data or [])
+    except Exception as _fq_err:
+        logger.error(f"[STRUCTURED] FAQ fetch error: {_fq_err}")
     logger.info(f"[STRUCTURED] Attempting structured path for: {prompt[:60]!r}")
     try:
         _id_lines = []
@@ -885,7 +891,14 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
         # company and a plushie shop should not be treated identically by
         # the AI's own understanding of what kind of business it represents.
         _btype = _branding.get("business_type") or "small business"
-        logger.info(f"[STRUCTURED] Calling get_structured_answer with {len(all_prods)} products")
+        # The business's own FAQs, with real IDs, so the AI can match a
+        # reworded question ("what time do you close?") to the right FAQ
+        # ("What are your opening hours?"). The AI only selects an ID; the
+        # real answer text is taken from the database below.
+        _faq_lines = []
+        for f in _faqs_for_ai[:40]:
+            _faq_lines.append(f"id: {f.get('id')} | Q: {f.get('question', '')} | A: {f.get('answer', '')}")
+        logger.info(f"[STRUCTURED] Calling get_structured_answer with {len(all_prods)} products, {len(_faq_lines)} FAQs")
         _structured_result = get_engine(cid).get_structured_answer(
             question=prompt,
             business_name=_bname,
@@ -893,6 +906,7 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
             business_location="South Africa",
             products_context=_products_context,
             chat_history=history,
+            faqs_context="\n".join(_faq_lines),
         )
         logger.info(f"[STRUCTURED] Result: {_structured_result!r}")
     except Exception as _struct_err:
@@ -911,6 +925,14 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
         if str(pid) in _real_ids
     ]
     _tone = str(_structured_result.get("reply_tone") or "").strip()
+
+    # Same rule for FAQs: an ID that isn't one of this client's real, active
+    # FAQs is dropped. Only the database's answer text is ever shown.
+    _real_faqs = {str(f.get("id")): f for f in _faqs_for_ai}
+    _verified_faqs = [
+        _real_faqs[str(fid)] for fid in (_structured_result.get("selected_faq_ids") or [])
+        if str(fid) in _real_faqs
+    ][:2]
 
     # "Show me the full catalog" is a universal request pattern — it means
     # the same thing regardless of what a business sells, unlike a specific
@@ -953,33 +975,48 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
     # anything about products in the first place. A brand-new signup with
     # no products uploaded yet is exactly the account most likely to hit
     # this.
-    _empty_catalog_hallucination = (not all_prods) and not _is_pure_reaction
+    # A verified FAQ answer is grounded in the business's own words, so it is
+    # safe to show even with no products. Anything else on a no-products
+    # account (service business, or a signup that hasn't uploaded yet) gets
+    # an honest "I'd rather not guess" plus a handoff -- worded so it reads
+    # correctly for a painter or a consultant, not just a shop.
+    _empty_catalog_hallucination = (not all_prods) and not _is_pure_reaction and not _verified_faqs
 
     if _empty_catalog_hallucination:
-        final_structured = (
-            "We haven't loaded our product catalog into the system yet, so I can't confirm "
-            "specific items right now. Let me connect you with the team directly for that."
-        )
-        result = {"response": final_structured, "ai_failed": False}
+        _wa_ec = ""
+        _biz_ec = "our team"
         try:
             _b_ec = tenancy.account_branding(_get_supabase(), cid)
             _wa_ec = (_b_ec.get("whatsapp_number") or "").strip()
-            if _wa_ec:
-                import urllib.parse as _urlp_ec
-                _biz_ec = (_b_ec.get("business_name") or "our team").strip()
-                _ctx_ec = f"Hi {_biz_ec}, I was asking: \"{prompt[:150]}\" and need some help."
-                result["handoff"] = True
-                result["whatsapp"] = f"https://wa.me/{_wa_ec}?text={_urlp_ec.quote(_ctx_ec)}"
+            _biz_ec = (_b_ec.get("business_name") or "our team").strip()
         except Exception:
             pass
+        if _wa_ec:
+            final_structured = ("I don't have that information here, so I'd rather not guess. "
+                                "Let me connect you with the team directly.")
+        else:
+            final_structured = ("I don't have that information here, so I'd rather not guess. "
+                                "Please contact the team directly and they'll help you.")
+        result = {"response": final_structured, "ai_failed": False}
+        if _wa_ec:
+            import urllib.parse as _urlp_ec
+            _ctx_ec = f"Hi {_biz_ec}, I was asking: \"{prompt[:150]}\" and need some help."
+            result["handoff"] = True
+            result["whatsapp"] = f"https://wa.me/{_wa_ec}?text={_urlp_ec.quote(_ctx_ec)}"
         return result
 
+    _facts = ""
     if _verified and not _is_pure_reaction:
         _fact_lines = []
         for p in _verified:
             _stk = "in stock" if p.get("in_stock") else "out of stock"
             _fact_lines.append(f"{p.get('name')} \u2014 ZAR {float(p.get('price') or 0):.2f} ({_stk})")
         _facts = " \u2022 ".join(_fact_lines)
+
+    if _verified_faqs and not _is_pure_reaction:
+        _faq_text = " ".join(str(f.get("answer") or "").strip() for f in _verified_faqs if f.get("answer"))
+        final_structured = _faq_text + ((" " + _facts) if _facts else "")
+    elif _facts:
         final_structured = (_tone + " " if _tone else "") + _facts
     else:
         final_structured = _tone or "How can I help you today?"
