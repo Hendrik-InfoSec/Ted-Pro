@@ -353,8 +353,10 @@ class HybridEngine:
         if faqs_context.strip():
             faq_block = ("\n\nBelow are the business's own FAQs, each with a real ID:\n"
                          + faqs_context +
-                         "\n\nIf one of these FAQs answers the customer's question (even if "
-                         "they word it differently), put that FAQ's ID in selected_faq_ids. "
+                         "\n\nOnly if one of these FAQs directly answers the customer's actual "
+                         "question (the wording can differ, but the meaning must match), put that "
+                         "FAQ's ID in selected_faq_ids. Product, stock and browsing questions use "
+                         "selected_product_ids, not FAQs. When unsure, select no FAQ. "
                          "The FAQ's own answer will be shown to the customer word for word, "
                          "so do NOT restate any fact from it in reply_tone. If no FAQ answers "
                          "the question, return an empty selected_faq_ids list.")
@@ -471,6 +473,61 @@ class HybridEngine:
                     return None
                 time.sleep(1)
         return None
+
+    def verify_faq_match(self, question: str, faq_question: str, faq_answer: str) -> bool:
+        """
+        Narrow yes/no check run only when the main call picked an FAQ: does
+        this stored FAQ answer actually answer this exact customer message?
+        A small model is far more reliable at one focused yes/no than at
+        picking from a list while doing everything else. Fails closed: any
+        error or unclear result means the FAQ is NOT shown.
+        """
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": (
+                    "You check whether a business's stored FAQ answer directly answers a "
+                    "customer's message. Respond with structured JSON only. Set "
+                    "answers_question to true ONLY if the FAQ answer directly and specifically "
+                    "answers what the customer asked. If the FAQ is merely related, about a "
+                    "different topic, or only partly relevant, set it to false.")},
+                {"role": "user", "content": (
+                    f"Customer message: {question}\n\n"
+                    f"FAQ question: {faq_question}\nFAQ answer: {faq_answer}")},
+            ],
+            "temperature": 0,
+            "max_tokens": 50,
+            "reasoning": {"enabled": False},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "faq_check",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answers_question": {"type": "boolean"}},
+                        "required": ["answers_question"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": os.getenv("SITE_URL", "https://ted-pro.onrender.com"),
+            "X-Title": "TedPro Assistant",
+        }
+        try:
+            response = requests.post(self.api_url, headers=headers, json=payload, timeout=15)
+            if response.status_code != 200:
+                self.logger.error(f"FAQ check API error {response.status_code}: {response.text[:200]}")
+                return False
+            content = response.json()["choices"][0]["message"]["content"]
+            return json.loads(content).get("answers_question") is True
+        except Exception as e:
+            self.logger.error(f"FAQ check failed: {e}")
+            return False
 
     def get_api_answer(self, question: str, stream: bool = True,
                        system_prompt: Optional[str] = None,
