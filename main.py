@@ -934,6 +934,24 @@ def get_structured_reply(prompt: str, all_prods: list, cid: str, history: list) 
         if str(fid) in _real_faqs
     ][:2]
 
+    # Second, narrow check on every FAQ the AI picked: does it actually answer
+    # THIS question? A loosely-picked FAQ shown word for word is a confident
+    # wrong answer (live test: "something cozy?" got the cleaning FAQ), so
+    # anything that isn't a clear yes is dropped. Fails closed.
+    if _verified_faqs:
+        _checked_faqs = []
+        for f in _verified_faqs:
+            try:
+                _ok = get_engine(cid).verify_faq_match(prompt, f.get("question", ""), f.get("answer", ""))
+            except Exception as _vf_err:
+                logger.error(f"[STRUCTURED] FAQ check error: {_vf_err}")
+                _ok = False
+            if _ok:
+                _checked_faqs.append(f)
+            else:
+                logger.info(f"[STRUCTURED] FAQ {f.get('id')} rejected for: {prompt[:60]!r}")
+        _verified_faqs = _checked_faqs
+
     # "Show me the full catalog" is a universal request pattern — it means
     # the same thing regardless of what a business sells, unlike a specific
     # category word. The AI doesn't reliably select every ID on its own for
