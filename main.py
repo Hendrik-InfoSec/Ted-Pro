@@ -8,6 +8,8 @@ import hashlib
 import hmac
 import secrets
 import requests
+import asyncio
+from starlette.concurrency import run_in_threadpool
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -3484,6 +3486,70 @@ YOCO_WEBHOOK_SECRET = os.environ.get("YOCO_WEBHOOK_SECRET", "")
 YOCO_CHECKOUT_URL = "https://payments.yoco.com/api/checkouts"
 
 
+# Monthly subscription price (ZAR). The pay button always charges this amount
+# server-side, and the payment webhook refuses to extend a subscription for
+# anything less -- clients never choose the amount themselves.
+MONTHLY_PRICE_ZAR = float(os.environ.get("TEDPRO_MONTHLY_PRICE_ZAR", "999"))
+
+
+def _parse_paid_until(value):
+    """paid_until as a naive UTC datetime (the server clock), or None."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(__import__("datetime").timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _sa_time(dt) -> str:
+    """Show a UTC datetime in South African time for clients."""
+    return (dt + timedelta(hours=2)).strftime("%d %B %Y at %H:%M") + " (SA time)"
+
+
+def _billing_info(acct: dict) -> dict:
+    pu = _parse_paid_until((acct or {}).get("paid_until"))
+    if not pu:
+        return {"paid_until": None, "remaining": None, "expired": False, "due_soon": False}
+    remaining = pu - datetime.now()
+    expired = remaining.total_seconds() <= 0
+    return {"paid_until": pu, "remaining": remaining, "expired": expired,
+            "due_soon": (not expired) and remaining <= timedelta(days=7)}
+
+
+def _remaining_words(remaining) -> str:
+    secs = remaining.total_seconds()
+    if secs <= 0:
+        return "has ended"
+    if secs < 86400:
+        hours = max(1, int(round(secs / 3600)))
+        return f"ends in {hours} hour{'s' if hours != 1 else ''}"
+    days = int(round(secs / 86400))
+    if days >= 2:
+        return f"ends in {days} days"
+    return "ends in 1 day"
+
+
+def _billing_pay_js() -> str:
+    """Pay-now handler shared by the dashboard banner, pop-up and billing page.
+    The admin page JS adds the CSRF header to fetch automatically."""
+    return (
+        "<script>"
+        "function tpPayNow(btn){"
+        "  btn.disabled=true; var old=btn.textContent; btn.textContent='Opening secure payment...';"
+        "  fetch('/admin/billing/pay',{method:'POST',credentials:'same-origin'})"
+        "  .then(function(r){return r.json();}).then(function(d){"
+        "    if(d.ok){window.location.href=d.url;}"
+        "    else{btn.disabled=false;btn.textContent=old;alert(d.error||'Payment could not start. Please try again.');}"
+        "  }).catch(function(){btn.disabled=false;btn.textContent=old;alert('Payment could not start. Please try again.');});"
+        "}"
+        "</script>"
+    )
+
+
 def create_yoco_checkout(amount_zar_rands: float, client_id: str, business_name: str, base_url: str) -> dict | None:
     """
     Creates a hosted Yoco checkout for a specific client's payment. Amount is
@@ -3561,73 +3627,67 @@ def verify_yoco_webhook(payload_bytes: bytes, headers: dict, secret: str, tolera
 
 @app.get("/admin/billing", response_class=HTMLResponse)
 async def admin_billing_page(request: Request):
-    """Generate a real Yoco payment link for this client's account, and see
-    the current paid_until date. The client gets sent this link manually —
-    no automated recurring subscription yet, that's a later, bigger step."""
+    """The client's own billing page: subscription status and a pay button
+    for the fixed monthly price."""
     acid = admin_client(request)
     if not acid:
         return RedirectResponse(url="/admin", status_code=303)
     try:
-        sb = _get_supabase()
-        acct = tenancy.get_account(sb, acid) or {}
-        paid_until = acct.get("paid_until", "")
-        biz = acct.get("business_name", "your business")
+        acct = tenancy.get_account(_get_supabase(), acid) or {}
+        info = _billing_info(acct)
+        biz = _esc_html(acct.get("business_name", "your business"))
+        price = f"R{MONTHLY_PRICE_ZAR:,.0f}".replace(",", " ")
+        if info["paid_until"] is None:
+            status = "Your assistant is active."
+        elif info["expired"]:
+            status = ("<strong style='color:#991b1b'>Your subscription ended on "
+                      + _sa_time(info["paid_until"]) + ".</strong> Your assistant is paused until you pay.")
+        else:
+            status = ("Your assistant is active until <strong>" + _sa_time(info["paid_until"]) + "</strong> ("
+                      + _remaining_words(info["remaining"]) + ").")
         content = (
             "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-lg mx-auto'>"
             "<div class='flex justify-between items-center mb-6'>"
             "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f4b3 Billing</h1>"
-            "<a href='/admin' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Back to Admin</a></div>"
+            "<a href='/admin' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Back to dashboard</a></div>"
             "<div class='bg-white rounded-xl border border-[#FFE4CC] p-5 mb-4'>"
-            f"<p class='text-sm text-[#5A3A1B] mb-1'>Business: <strong>{_esc_html(biz)}</strong></p>"
-            f"<p class='text-sm text-[#5A3A1B]'>Paid until: <strong>{_esc_html(str(paid_until)[:10] or 'Not set')}</strong></p>"
-            "</div>"
+            f"<p class='text-sm text-[#5A3A1B] mb-2'>Business: <strong>{biz}</strong></p>"
+            f"<p class='text-sm text-[#5A3A1B]'>{status}</p></div>"
             "<div class='bg-white rounded-xl border border-[#FFE4CC] p-5'>"
-            "<p class='text-sm text-[#5A3A1B] mb-3'>Generate a real payment link for this client. Send it to them directly — paid_until extends automatically once Yoco confirms payment.</p>"
-            "<input id='bill-amount' type='number' placeholder='Amount in Rands (e.g. 1299)' style='padding:9px 12px;border:1px solid #FFD5A5;border-radius:8px;font-size:14px;width:100%;margin-bottom:10px'>"
-            "<button onclick='genLink()' style='padding:10px 20px;background:#FF922B;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer'>Generate payment link</button>"
-            "<div id='bill-result' style='margin-top:12px;font-size:13px'></div>"
+            f"<p class='text-sm text-[#5A3A1B] mb-3'>TedPro costs <strong>{price} per month</strong>. "
+            "Paying adds 30 days, starting from your current end date if you pay early, so you never lose days.</p>"
+            f"<button onclick='tpPayNow(this)' style='padding:12px 22px;background:#FF922B;color:white;border:none;"
+            f"border-radius:10px;font-weight:700;cursor:pointer;font-size:15px'>Pay {price} now</button>"
+            "<p class='text-xs text-[#8B6914] mt-3'>You'll pay securely on Yoco's payment page.</p>"
             "</div></div></div>"
-            "<script>"
-            "function genLink(){"
-            "  var amt=document.getElementById('bill-amount').value;"
-            "  var res=document.getElementById('bill-result');"
-            "  if(!amt||amt<=0){res.textContent='Enter a valid amount.';res.style.color='#991b1b';return;}"
-            "  res.textContent='Generating...';res.style.color='#8B6914';"
-            "  fetch('/admin/billing/create-link',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:'amount='+amt})"
-            "  .then(function(r){return r.json();}).then(function(d){"
-            "    if(d.ok){res.innerHTML='<a href=\"'+d.url+'\" target=\"_blank\" style=\"color:#FF922B;text-decoration:underline;word-break:break-all\">'+d.url+'</a>';}"
-            "    else{res.textContent='Error: '+(d.error||'failed');res.style.color='#991b1b';}"
-            "  }).catch(function(e){res.textContent=e.message;res.style.color='#991b1b';});"
-            "}"
-            "</script>"
+            + _billing_pay_js()
         )
-        return HTMLResponse(content=render_page("Billing", content))
+        return HTMLResponse(content=render_page("Billing", content, include_admin_js=True, request=request))
     except Exception as e:
         logger.error(f"admin_billing_page error: {e}")
-        return HTMLResponse(f"<div class='p-8 text-red-500'>Error: {e}</div>")
+        return HTMLResponse("<div class='p-8 text-red-500'>Billing is unavailable right now. Please try again shortly.</div>")
 
 
-@app.post("/admin/billing/create-link")
-async def admin_billing_create_link(request: Request, amount: float = Form(...)):
+@app.post("/admin/billing/pay")
+async def admin_billing_pay(request: Request):
+    """Start a Yoco checkout for the fixed monthly price. The amount is set
+    here on the server -- never taken from the browser."""
     acid = admin_client(request)
     if not acid:
-        return JSONResponse({"ok": False, "error": "Not authenticated"}, status_code=401)
+        return JSONResponse({"ok": False, "error": "Please log in again."}, status_code=401)
     if not validate_csrf_token(request):
-        return JSONResponse({"ok": False, "error": "Invalid or missing CSRF token — please refresh and try again."}, status_code=403)
-    if amount <= 0:
-        return JSONResponse({"ok": False, "error": "Amount must be positive"}, status_code=400)
+        return JSONResponse({"ok": False, "error": "Your session expired. Please refresh the page and try again."}, status_code=403)
     try:
-        sb = _get_supabase()
-        acct = tenancy.get_account(sb, acid) or {}
+        acct = tenancy.get_account(_get_supabase(), acid) or {}
         biz = acct.get("business_name", "TedPro client")
         base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
-        checkout = create_yoco_checkout(amount, acid, biz, base)
+        checkout = create_yoco_checkout(MONTHLY_PRICE_ZAR, acid, biz, base)
         if not checkout or "redirectUrl" not in checkout:
-            return JSONResponse({"ok": False, "error": "Yoco did not return a payment link"}, status_code=502)
+            return JSONResponse({"ok": False, "error": "Payments aren't available right now. Please try again shortly."}, status_code=502)
         return JSONResponse({"ok": True, "url": checkout["redirectUrl"]})
     except Exception as e:
-        logger.error(f"admin_billing_create_link error: {e}")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        logger.error(f"admin_billing_pay error: {e}")
+        return JSONResponse({"ok": False, "error": "Payment could not start. Please try again."}, status_code=500)
 
 
 @app.get("/admin/billing/success", response_class=HTMLResponse)
@@ -3640,6 +3700,153 @@ async def admin_billing_success(request: Request):
         "<p class='text-sm text-[#8B6914] mt-2'>Thank you — this may take a minute to reflect in the dashboard.</p>"
         "</div></div>"
     )))
+
+
+# ---------------------------------------------------------------------------
+# Subscription reminder emails: 7 days, 3 days and a few hours before the end
+# date. Only the stage that matches right now is ever sent (a late run never
+# sends a stale "7 days left"). Each send is recorded in billing_reminders,
+# keyed by (client, end date, stage), so it can never go out twice -- and
+# because paying moves the end date 30 days out, a payment automatically
+# stops any reminders that haven't gone out yet for the old date.
+# ---------------------------------------------------------------------------
+REMINDER_STAGES = [
+    # (stage, remaining time above, remaining time at most)
+    ("7d", timedelta(days=3), timedelta(days=7)),
+    ("3d", timedelta(hours=6), timedelta(days=3)),
+    ("6h", timedelta(0), timedelta(hours=6)),
+]
+
+
+def _reminder_stage(remaining):
+    for stage, above, at_most in REMINDER_STAGES:
+        if above < remaining <= at_most:
+            return stage
+    return None
+
+
+def _send_billing_reminder_email(to_email: str, business_name: str, stage: str,
+                                 paid_until, dashboard_url: str) -> bool:
+    gmail_user = os.environ.get("GMAIL_USER")
+    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD")
+    if not gmail_user or not gmail_pass:
+        logger.error("Cannot send billing reminder: Gmail credentials not set")
+        return False
+    when = {"7d": "in 7 days", "3d": "in 3 days", "6h": "in a few hours"}[stage]
+    price = f"R{MONTHLY_PRICE_ZAR:,.0f}".replace(",", " ")
+    biz = _esc_html(business_name or "your business")
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Your TedPro subscription ends {when}"
+        msg["From"] = f"TedPro <{gmail_user}>"
+        msg["To"] = to_email
+        html = (
+            "<html><body style='font-family:sans-serif;background:#FFF9F4;padding:20px'>"
+            "<div style='max-width:500px;margin:0 auto;background:white;padding:30px;border-radius:20px'>"
+            "<div style='text-align:center;font-size:44px'>&#129528;</div>"
+            f"<h2 style='color:#2D1B00;text-align:center'>Your subscription ends {when}</h2>"
+            f"<p style='color:#5A3A1B'>Your TedPro assistant for <strong>{biz}</strong> is active until "
+            f"<strong>{_sa_time(paid_until)}</strong>.</p>"
+            f"<p style='color:#5A3A1B'>To keep it answering your customers, pay {price} from your dashboard. "
+            "Paying early doesn't lose you any days.</p>"
+            "<div style='text-align:center;margin:24px 0'>"
+            f"<a href='{dashboard_url}' style='background:#FF922B;color:white;padding:14px 32px;"
+            "border-radius:30px;text-decoration:none;font-weight:700;font-size:15px'>Pay from your dashboard</a></div>"
+            "<p style='color:#8B6914;font-size:12px'>Already paid? You can ignore this email.</p>"
+            "</div></body></html>"
+        )
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
+            srv.login(gmail_user, gmail_pass)
+            srv.sendmail(gmail_user, to_email, msg.as_string())
+        logger.info(f"Billing reminder {stage} sent to {to_email}")
+        return True
+    except Exception as e:
+        logger.error(f"Billing reminder email error ({to_email}, {stage}): {e}")
+        return False
+
+
+def run_subscription_reminders() -> dict:
+    """Send whichever reminder is due right now for each account. Safe to run
+    as often as you like: the billing_reminders record stops duplicates."""
+    sent = skipped = failed = 0
+    try:
+        sb = _get_supabase()
+        accounts = (sb.table("accounts")
+                    .select("client_id,business_name,admin_email,paid_until,account_status")
+                    .execute().data or [])
+    except Exception as e:
+        logger.error(f"Reminder run: could not load accounts: {e}")
+        return {"sent": 0, "skipped": 0, "failed": 0, "error": "accounts"}
+    base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
+    now = datetime.now()
+    for a in accounts:
+        cid = a.get("client_id")
+        email = (a.get("admin_email") or "").strip()
+        if not cid or cid == CLIENT_ID or not email:
+            continue
+        if a.get("account_status") in ("suspended", "cancelled"):
+            continue
+        pu = _parse_paid_until(a.get("paid_until"))
+        if not pu:
+            continue
+        stage = _reminder_stage(pu - now)
+        if not stage:
+            continue
+        period_key = pu.isoformat(timespec="seconds")
+        # Record first, send second: a duplicate record means it already
+        # went out (or another run is sending it right now) -- skip.
+        try:
+            sb.table("billing_reminders").insert(
+                {"client_id": cid, "period_end": period_key, "stage": stage}).execute()
+        except Exception as e:
+            if "duplicate" not in str(e).lower() and "23505" not in str(e):
+                logger.error(f"Reminder run: could not record {stage} for {cid}: {e}")
+            skipped += 1
+            continue
+        if _send_billing_reminder_email(email, a.get("business_name"), stage, pu, f"{base}/admin?client={cid}"):
+            sent += 1
+        else:
+            failed += 1
+            # Let the next run retry this one.
+            try:
+                (sb.table("billing_reminders").delete().eq("client_id", cid)
+                 .eq("period_end", period_key).eq("stage", stage).execute())
+            except Exception as e:
+                logger.error(f"Reminder run: could not clear failed record for {cid}: {e}")
+    return {"sent": sent, "skipped": skipped, "failed": failed}
+
+
+@app.on_event("startup")
+async def _start_billing_reminder_loop():
+    """Check for due reminders every 30 minutes while the app is running."""
+    if os.environ.get("DISABLE_BILLING_REMINDERS") == "1":
+        return
+
+    async def _loop():
+        await asyncio.sleep(60)
+        while True:
+            try:
+                result = await run_in_threadpool(run_subscription_reminders)
+                if result.get("sent") or result.get("failed"):
+                    logger.info(f"Billing reminders: {result}")
+            except Exception as e:
+                logger.error(f"Billing reminder loop error: {e}")
+            await asyncio.sleep(1800)
+
+    asyncio.create_task(_loop())
+
+
+@app.post("/internal/billing-reminders")
+async def billing_reminders_now(request: Request):
+    """Run the reminder check on demand (for testing, or an external cron).
+    Requires the CRON_SECRET env var in an X-Cron-Secret header."""
+    secret = os.environ.get("CRON_SECRET", "")
+    provided = request.headers.get("x-cron-secret", "")
+    if not secret or not hmac.compare_digest(secret, provided):
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+    result = await run_in_threadpool(run_subscription_reminders)
+    return JSONResponse({"ok": True, **result})
 
 
 @app.post("/webhook/yoco-payment")
@@ -3670,6 +3877,21 @@ async def webhook_yoco_payment(request: Request):
         if not acct:
             logger.warning(f"Yoco webhook: payment for unknown client_id {client_id}")
             return JSONResponse({"ok": False, "error": "Unknown client"}, status_code=404)
+
+        # Only a full monthly payment extends the subscription. Yoco sends
+        # the amount in cents. If the amount is missing (unexpected payload
+        # shape) we still extend, but log it so it can be checked.
+        _pay = event.get("payload", {}) or {}
+        _paid_cents = _pay.get("amount")
+        _currency = str(_pay.get("currency") or "ZAR").upper()
+        _expected_cents = int(round(MONTHLY_PRICE_ZAR * 100))
+        if isinstance(_paid_cents, (int, float)):
+            if _currency != "ZAR" or _paid_cents < _expected_cents:
+                logger.warning(f"Yoco webhook: {client_id} paid {_paid_cents} {_currency}, "
+                               f"expected {_expected_cents} ZAR -- subscription NOT extended")
+                return JSONResponse({"ok": False, "error": "Amount below subscription price"}, status_code=200)
+        else:
+            logger.warning(f"Yoco webhook: no amount in payload for {client_id}; extending anyway")
 
         current_paid_until = acct.get("paid_until")
         now = datetime.now()
@@ -4171,14 +4393,65 @@ async def _admin_dashboard(request: Request):
             "</script>"
         )
 
+        # Subscription banner + pop-up: shown when 7 days or less remain, or
+        # once it has ended. The pop-up appears once per browser session;
+        # the banner stays until they pay.
+        billing_html = ""
+        try:
+            _acct_b = tenancy.get_account(sb, acid) or {}
+            _info_b = _billing_info(_acct_b)
+            if acid != CLIENT_ID and _info_b["paid_until"] and (_info_b["expired"] or _info_b["due_soon"]):
+                _price_b = f"R{MONTHLY_PRICE_ZAR:,.0f}".replace(",", " ")
+                if _info_b["expired"]:
+                    _msg_b = ("Your TedPro subscription ended on " + _sa_time(_info_b["paid_until"])
+                              + ". Your assistant is paused until you pay.")
+                    _bg, _bd = "#FEF2F2", "#FCA5A5"
+                else:
+                    _msg_b = ("Your TedPro subscription " + _remaining_words(_info_b["remaining"])
+                              + " (" + _sa_time(_info_b["paid_until"]) + ").")
+                    _bg, _bd = "#FFF7ED", "#FDBA74"
+                _btn_b = ("<button onclick='tpPayNow(this)' style='padding:10px 18px;background:#FF922B;color:white;"
+                          "border:none;border-radius:10px;font-weight:700;cursor:pointer;white-space:nowrap'>"
+                          f"Pay {_price_b} now</button>")
+                billing_html = (
+                    f"<div style='background:{_bg};border:2px solid {_bd};border-radius:14px;padding:14px 16px;"
+                    "margin-bottom:1.25rem;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap'>"
+                    f"<p style='margin:0;color:#2D1B00;font-size:14px;font-weight:600'>{_esc_html(_msg_b)}</p>{_btn_b}</div>"
+                    "<div id='tp-pay-modal' style='display:none;position:fixed;inset:0;background:rgba(45,27,0,.55);"
+                    "z-index:9999;align-items:center;justify-content:center;padding:16px'>"
+                    "<div style='background:white;border-radius:18px;padding:24px;max-width:420px;width:100%;"
+                    "box-shadow:0 20px 50px rgba(0,0,0,.25)'>"
+                    "<p style='font-size:30px;margin:0 0 6px'>\U0001f4b3</p>"
+                    f"<h2 style='margin:0 0 8px;color:#2D1B00;font-size:19px;font-weight:800'>"
+                    f"{'Your subscription has ended' if _info_b['expired'] else 'Your subscription ends soon'}</h2>"
+                    f"<p style='margin:0 0 18px;color:#5A3A1B;font-size:14px'>{_esc_html(_msg_b)} "
+                    f"Pay {_price_b} to keep your assistant answering customers.</p>"
+                    f"<div style='display:flex;gap:10px;flex-wrap:wrap'>{_btn_b}"
+                    "<button onclick=\"tpCloseModal()\" style='padding:10px 18px;background:white;color:#5A3A1B;"
+                    "border:2px solid #FFE4CC;border-radius:10px;font-weight:700;cursor:pointer'>Remind me later</button>"
+                    "</div></div></div>"
+                    "<script>"
+                    "function tpCloseModal(){var m=document.getElementById('tp-pay-modal');if(m){m.style.display='none';}"
+                    "try{sessionStorage.setItem('tpPayModalSeen','1');}catch(e){}}"
+                    "(function(){var seen=false;try{seen=sessionStorage.getItem('tpPayModalSeen')==='1';}catch(e){}"
+                    "if(!seen){var m=document.getElementById('tp-pay-modal');if(m){m.style.display='flex';}}})();"
+                    "</script>"
+                    + _billing_pay_js()
+                )
+        except Exception as _b_err:
+            logger.error(f"Billing banner error for {acid}: {_b_err}")
+            billing_html = ""
+
         content = (
             "<div class='min-h-screen bg-[#FFF9F4] p-4'><div class='max-w-5xl mx-auto'>"
             "<div class='flex justify-between items-center mb-6'>"
             "<h1 class='text-2xl font-bold text-[#2D1B00]'>\U0001f4ca Admin Dashboard "
             "<span style='font-size:11px;font-weight:400;color:#8B6914'>v3.1</span></h1>"
+            "<a href='/admin/billing' class='text-sm font-bold text-[#FF922B] hover:underline mr-4'>\U0001f4b3 Billing</a>"
             "<a href='/admin/impact' class='text-sm font-bold text-[#FF922B] hover:underline mr-4'>\U0001f4c8 Impact</a>"
             "<a href='/admin/orders/test' class='text-sm text-[#8B6914] hover:text-[#FF922B] mr-4'>\U0001f9ea Test Order</a>"
             "<a href='/admin/logout' class='text-sm text-[#8B6914] hover:text-[#FF922B]'>Logout</a></div>"
+            + billing_html
             + tabs_html
             + "<div style='margin-top:1.5rem'>"
             + "<div id='panel-leads' style='display:block'>" + leads_panel + "</div>"
