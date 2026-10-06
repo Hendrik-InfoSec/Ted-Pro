@@ -3550,7 +3550,8 @@ def _billing_pay_js() -> str:
     )
 
 
-def create_yoco_checkout(amount_zar_rands: float, client_id: str, business_name: str, base_url: str) -> dict | None:
+def create_yoco_checkout(amount_zar_rands: float, client_id: str, business_name: str, base_url: str,
+                         success_url: str = "") -> dict | None:
     """
     Creates a hosted Yoco checkout for a specific client's payment. Amount is
     given in Rands and converted to cents here, matching Yoco's API. Returns
@@ -3564,7 +3565,7 @@ def create_yoco_checkout(amount_zar_rands: float, client_id: str, business_name:
         "amount": int(round(amount_zar_rands * 100)),
         "currency": "ZAR",
         "metadata": {"client_id": client_id, "business_name": business_name},
-        "successUrl": f"{base_url}/admin/billing/success",
+        "successUrl": success_url or f"{base_url}/admin/billing/success",
         "cancelUrl": f"{base_url}/admin/billing",
     }
     try:
@@ -3681,7 +3682,10 @@ async def admin_billing_pay(request: Request):
         acct = tenancy.get_account(_get_supabase(), acid) or {}
         biz = acct.get("business_name", "TedPro client")
         base = os.environ.get("RENDER_EXTERNAL_URL", "https://ted-pro.onrender.com")
-        checkout = create_yoco_checkout(MONTHLY_PRICE_ZAR, acid, biz, base)
+        import urllib.parse as _urlp_pay
+        _prev = str(acct.get("paid_until") or "")
+        _success = f"{base}/admin/billing/success?prev={_urlp_pay.quote(_prev)}"
+        checkout = create_yoco_checkout(MONTHLY_PRICE_ZAR, acid, biz, base, success_url=_success)
         if not checkout or "redirectUrl" not in checkout:
             return JSONResponse({"ok": False, "error": "Payments aren't available right now. Please try again shortly."}, status_code=502)
         return JSONResponse({"ok": True, "url": checkout["redirectUrl"]})
@@ -3690,16 +3694,63 @@ async def admin_billing_pay(request: Request):
         return JSONResponse({"ok": False, "error": "Payment could not start. Please try again."}, status_code=500)
 
 
+@app.get("/admin/billing/status")
+async def admin_billing_status(request: Request):
+    """Current end date for the logged-in client (used by the success page)."""
+    acid = admin_client(request)
+    if not acid:
+        return JSONResponse({"ok": False}, status_code=401)
+    acct = tenancy.get_account(_get_supabase(), acid) or {}
+    info = _billing_info(acct)
+    return JSONResponse({
+        "ok": True,
+        "paid_until": str(acct.get("paid_until") or ""),
+        "label": _sa_time(info["paid_until"]) if info["paid_until"] else "",
+    })
+
+
 @app.get("/admin/billing/success", response_class=HTMLResponse)
 async def admin_billing_success(request: Request):
-    return HTMLResponse(content=render_page("Payment received", (
-        "<div class='min-h-screen flex items-center justify-center'>"
-        "<div class='bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] text-center max-w-sm'>"
-        "<div class='text-4xl mb-4'>\u2705</div>"
-        "<h1 class='text-xl font-bold text-[#2D1B00]'>Payment received!</h1>"
-        "<p class='text-sm text-[#8B6914] mt-2'>Thank you — this may take a minute to reflect in the dashboard.</p>"
-        "</div></div>"
-    )))
+    """Where Yoco sends the customer after paying. Waits for Yoco's
+    confirmation to land (usually a few seconds), then shows the new end
+    date, with a way back to the dashboard."""
+    acid = admin_client(request)
+    btn = ("display:inline-block;padding:12px 22px;border-radius:10px;font-weight:700;"
+           "text-decoration:none;font-size:15px;margin:4px")
+    if not acid:
+        body = (
+            "<div class='text-4xl mb-4'>\u2705</div>"
+            "<h1 class='text-xl font-bold text-[#2D1B00]'>Payment received</h1>"
+            "<p class='text-sm text-[#8B6914] mt-2 mb-5'>Thank you. Log in to see your new end date.</p>"
+            f"<a href='/admin' style='{btn};background:#FF922B;color:white'>Log in to your dashboard</a>"
+        )
+        script = ""
+    else:
+        body = (
+            "<div class='text-4xl mb-4'>\u2705</div>"
+            "<h1 class='text-xl font-bold text-[#2D1B00]'>Payment received</h1>"
+            "<p id='tp-status' class='text-sm text-[#5A3A1B] mt-2 mb-5'>Thank you! Confirming your payment with Yoco...</p>"
+            f"<a href='/admin' style='{btn};background:#FF922B;color:white'>Back to your dashboard</a>"
+            f"<a href='/admin/billing' style='{btn};background:white;color:#5A3A1B;border:2px solid #FFE4CC'>View billing</a>"
+        )
+        script = (
+            "<script>(function(){"
+            "var prev=new URLSearchParams(location.search).get('prev')||'';"
+            "var el=document.getElementById('tp-status');var tries=0;"
+            "function check(){tries++;"
+            "fetch('/admin/billing/status',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(d){"
+            "if(d.ok&&d.paid_until&&d.paid_until!==prev){el.innerHTML='Thank you! Your assistant is now active until <strong>'+d.label+'</strong>.';return;}"
+            "if(tries<20){setTimeout(check,2000);}"
+            "else{el.textContent='Your payment went through. Your new end date can take a minute to show on your Billing page.';}"
+            "}).catch(function(){if(tries<20){setTimeout(check,2000);}});}"
+            "check();})();</script>"
+        )
+    content = (
+        "<div class='min-h-screen flex items-center justify-center p-4'>"
+        "<div class='bg-white p-8 rounded-2xl shadow-lg border border-[#FFE4CC] text-center max-w-md'>"
+        + body + "</div></div>" + script
+    )
+    return HTMLResponse(content=render_page("Payment received", content, request=request))
 
 
 # ---------------------------------------------------------------------------
@@ -3849,6 +3900,87 @@ async def billing_reminders_now(request: Request):
     return JSONResponse({"ok": True, **result})
 
 
+def _send_html_email(to_email: str, subject: str, html: str) -> bool:
+    gmail_user = os.environ.get("GMAIL_USER")
+    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD")
+    if not gmail_user or not gmail_pass or not to_email:
+        logger.error(f"Cannot send '{subject}': Gmail credentials or recipient missing")
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"TedPro <{gmail_user}>"
+        msg["To"] = to_email
+        msg["Reply-To"] = gmail_user
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
+            srv.login(gmail_user, gmail_pass)
+            srv.sendmail(gmail_user, to_email, msg.as_string())
+        logger.info(f"Email sent to {to_email}: {subject}")
+        return True
+    except Exception as e:
+        logger.error(f"Email error ({to_email}, {subject}): {e}")
+        return False
+
+
+def _payment_receipt_html(business_name: str, amount_zar: float, paid_at, payment_ref: str,
+                          new_until, is_test: bool) -> str:
+    row = ("<tr><td style='padding:8px 0;color:#8B6914;font-size:13px'>{k}</td>"
+           "<td style='padding:8px 0;color:#2D1B00;font-size:14px;text-align:right'><strong>{v}</strong></td></tr>")
+    rows = "".join(row.format(k=k, v=v) for k, v in [
+        ("Receipt for", _esc_html(business_name or "")),
+        ("Date paid", _sa_time(paid_at)),
+        ("Description", "TedPro assistant, 30 days"),
+        ("Amount paid", f"R{amount_zar:,.2f}".replace(",", " ")),
+        ("Payment reference", _esc_html(payment_ref or "-")),
+        ("Active until", _sa_time(new_until)),
+    ])
+    test_banner = ("<p style='background:#FEF3C7;color:#92400E;padding:10px;border-radius:10px;font-size:13px;"
+                   "text-align:center;margin:0 0 16px'><strong>TEST PAYMENT</strong>: no money was charged.</p>"
+                   if is_test else "")
+    return (
+        "<html><body style='font-family:sans-serif;background:#FFF9F4;padding:20px'>"
+        "<div style='max-width:500px;margin:0 auto;background:white;padding:30px;border-radius:20px'>"
+        "<div style='text-align:center;font-size:44px'>&#129528;</div>"
+        "<h2 style='color:#2D1B00;text-align:center;margin-bottom:4px'>Payment receipt</h2>"
+        "<p style='color:#5A3A1B;text-align:center;margin-top:0'>Thank you, your payment was received.</p>"
+        + test_banner +
+        f"<table style='width:100%;border-collapse:collapse;border-top:1px solid #FFE4CC'>{rows}</table>"
+        "<p style='color:#8B6914;font-size:12px;margin-top:20px'>Questions about this payment? Just reply to this email.</p>"
+        "</div></body></html>"
+    )
+
+
+def _send_payment_emails(acct: dict, client_id: str, amount_zar: float, payment_ref: str,
+                         new_until, is_test: bool) -> None:
+    """Receipt to the client + a 'new payment' note to the owner. Never
+    raises: an email problem must not affect the payment itself."""
+    try:
+        biz = acct.get("business_name") or client_id
+        paid_at = datetime.now()
+        tag = "[TEST] " if is_test else ""
+        client_email = (acct.get("admin_email") or "").strip()
+        if client_email:
+            _send_html_email(client_email, f"{tag}Your TedPro payment receipt",
+                             _payment_receipt_html(biz, amount_zar, paid_at, payment_ref, new_until, is_test))
+        else:
+            logger.warning(f"No admin_email for {client_id}; receipt not sent")
+        owner = os.environ.get("OWNER_EMAIL") or os.environ.get("GMAIL_USER")
+        if owner:
+            note = (
+                "<html><body style='font-family:sans-serif;padding:20px'>"
+                f"<h2 style='color:#2D1B00'>{tag}New TedPro payment</h2>"
+                f"<p><strong>{_esc_html(biz)}</strong> ({_esc_html(client_id)}) paid "
+                f"<strong>R{amount_zar:,.2f}</strong>.</p>".replace(",", " ") +
+                f"<p>Active until: {_sa_time(new_until)}<br>Yoco reference: {_esc_html(payment_ref or '-')}<br>"
+                f"Receipt sent to: {_esc_html(client_email or 'no email on file')}</p>"
+                "</body></html>"
+            )
+            _send_html_email(owner, f"{tag}TedPro payment: {biz} paid R{amount_zar:,.2f}".replace(",", " "), note)
+    except Exception as e:
+        logger.error(f"Payment emails error for {client_id}: {e}")
+
+
 @app.post("/webhook/yoco-payment")
 async def webhook_yoco_payment(request: Request):
     """Yoco calls this after a payment completes. Verified via Standard
@@ -3893,6 +4025,25 @@ async def webhook_yoco_payment(request: Request):
         else:
             logger.warning(f"Yoco webhook: no amount in payload for {client_id}; extending anyway")
 
+        # Yoco can send the same notification more than once (e.g. if our
+        # reply was slow). Record each payment reference once; a repeat is
+        # acknowledged but never adds another 30 days.
+        _payment_ref = str(_pay.get("id") or "")
+        _is_test = str(_pay.get("mode") or "").lower() == "test"
+        if _payment_ref:
+            try:
+                sb.table("processed_payments").insert({
+                    "payment_id": _payment_ref,
+                    "client_id": client_id,
+                    "amount_cents": int(_paid_cents) if isinstance(_paid_cents, (int, float)) else None,
+                    "mode": str(_pay.get("mode") or ""),
+                }).execute()
+            except Exception as e:
+                if "duplicate" in str(e).lower() or "23505" in str(e):
+                    logger.info(f"Yoco webhook: payment {_payment_ref} already processed, ignoring repeat")
+                    return JSONResponse({"ok": True, "duplicate": True})
+                logger.error(f"Yoco webhook: could not record payment {_payment_ref}: {e}")
+
         current_paid_until = acct.get("paid_until")
         now = datetime.now()
         base_date = now
@@ -3910,6 +4061,12 @@ async def webhook_yoco_payment(request: Request):
             "account_status": "active",
         }).eq("client_id", client_id).execute()
         logger.info(f"Payment confirmed for {client_id}, paid_until extended to {new_paid_until}")
+        # Receipt + owner notice run in the background so Yoco gets its
+        # reply straight away.
+        _amount_zar = (_paid_cents / 100) if isinstance(_paid_cents, (int, float)) else MONTHLY_PRICE_ZAR
+        asyncio.create_task(run_in_threadpool(
+            _send_payment_emails, acct, client_id, _amount_zar, _payment_ref,
+            _parse_paid_until(new_paid_until), _is_test))
         return JSONResponse({"ok": True})
     except Exception as e:
         logger.error(f"webhook_yoco_payment processing error: {e}")
